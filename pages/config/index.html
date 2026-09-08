@@ -502,7 +502,6 @@ function renderDetail() {
     <div class="btns">
       <button class="btn-primary" id="btn-save">💾 保存</button>
       <button class="btn-ghost" id="btn-refresh">🔄 刷新</button>
-      <button class="btn-ghost" id="btn-draw">🎲 立即开奖</button>
     </div>`;
   document.querySelectorAll("#f-mode button,#f-st button").forEach(b => b.onclick = () => {
     const parent = b.parentElement;
@@ -519,7 +518,6 @@ function renderDetail() {
   syncSched();
   document.getElementById("btn-save").onclick = saveDetail;
   document.getElementById("btn-refresh").onclick = () => selectGroup(curUmo);
-  document.getElementById("btn-draw").onclick = doDraw;
 }
 
 function readSched() {
@@ -553,28 +551,6 @@ async function saveDetail() {
   } else {
     toast("❌ " + ((r && r.message) || "保存失败"));
   }
-}
-
-async function doDraw() {
-  const grp = groups.find(g => g.umo === curUmo);
-  const observed = grp ? (grp.member_observed || 0) : 0;
-  let msg = "确定立即开奖？会真实发送开奖消息并记录中奖。";
-  if (observed === 0) {
-    msg = "该群还没有观测到任何成员发言（0 人）。\n\n"
-      + "若参与模式不是「报名」，可能抽不出中奖者。\n"
-      + "仍要立即开奖吗？";
-  }
-  if (!confirm(msg)) return;
-  let r;
-  try {
-    r = await apiPost("draw", { umo: curUmo });
-  } catch (e) {
-    toast("❌ 开奖请求失败：" + ((e && e.message) || e));
-    return;
-  }
-  toast(r && r.status === "ok"
-    ? "🎲 开奖指令已执行，请在群内查看"
-    : "❌ " + ((r && r.message) || "失败"));
 }
 
 /* ---------- 启动 ----------

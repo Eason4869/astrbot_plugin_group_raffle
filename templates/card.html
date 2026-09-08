@@ -4,28 +4,44 @@
 <meta charset="UTF-8">
 <style>
   * { box-sizing:border-box; margin:0; padding:0; }
+  html,body { margin:0; padding:0; width:520px; }
   body {
     font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-    width:430px;
-    background:linear-gradient(160deg,#fff7ec 0%,#ffe9d6 55%,#ffd9b8 100%);
-    color:#5a3210;
-    padding:26px 26px 20px;
+    background:linear-gradient(165deg,#fff6ea 0%,#ffe8d0 60%,#ffd8ae 100%);
+    color:#4a2c0e; padding:22px 24px 18px;
   }
-  .title { text-align:center; font-size:26px; font-weight:800; letter-spacing:2px; }
-  .sub { text-align:center; font-size:12px; color:#9a6a3a; margin:8px 0 16px; }
+  .banner {
+    background:linear-gradient(120deg,#e67e22,#f0a04b);
+    border-radius:14px; padding:16px 12px; text-align:center;
+    box-shadow:0 4px 12px rgba(230,126,34,.28);
+  }
+  .banner .title { font-size:26px; font-weight:800; color:#fff; letter-spacing:2px; }
+  .banner .sub { font-size:12px; color:#fff3e6; margin-top:6px; opacity:.95; }
+  .banner.sim { background:linear-gradient(120deg,#8a6de9,#a98ff0); box-shadow:0 4px 12px rgba(138,109,233,.3); }
+  .meta { text-align:center; font-size:13px; color:#9a6a3a; margin:14px 0 6px; }
   .tier {
-    background:rgba(255,255,255,.72); border-radius:14px; padding:12px 16px; margin:10px 0;
+    background:rgba(255,255,255,.82); border:1px solid #f5dfc4;
+    border-radius:14px; padding:14px 18px; margin:12px 0;
+    box-shadow:0 2px 8px rgba(120,70,20,.06);
   }
-  .prize { font-size:15px; font-weight:700; color:#c2571a; margin-bottom:6px; }
-  .names { font-size:20px; font-weight:800; color:#3d2200; line-height:1.55; word-break:break-all; }
-  .short { font-size:12px; color:#b05a2a; font-weight:400; margin-left:6px; }
-  .foot { text-align:center; font-size:11px; color:#b08a5e; margin-top:14px; }
-  .note { font-size:12px; color:#8a5a2a; margin-top:6px; line-height:1.5; }
+  .tier .prize {
+    font-size:15px; font-weight:800; color:#fff;
+    background:linear-gradient(120deg,#e67e22,#f0a04b);
+    display:inline-block; border-radius:999px; padding:3px 14px; margin-bottom:10px;
+  }
+  .names { font-size:22px; font-weight:800; color:#3a1f00; line-height:1.6; word-break:break-all; }
+  .names .short { font-size:12px; color:#b05a2a; font-weight:500; margin-left:8px; }
+  .note { font-size:12px; color:#8a5a2a; margin-top:4px; line-height:1.6;
+    background:rgba(255,255,255,.5); border-radius:10px; padding:8px 12px; }
+  .foot { text-align:center; font-size:11px; color:#b08a5e; margin-top:16px; letter-spacing:1px; }
 </style>
 </head>
 <body>
-  <div class="title">{{ title }}</div>
-  <div class="sub">{{ group }} · {{ mode_label }} · 候选 {{ pool_size }} 人 · {{ when }}</div>
+  <div class="banner {{ 'sim' if simulate else '' }}">
+    <div class="title">{{ title }}</div>
+    <div class="sub">{{ group }} · {{ mode_label }} · 候选 {{ pool_size }} 人 · {{ when }}</div>
+  </div>
+  <div class="meta">— 中奖名单 —</div>
   {% for t in tiers %}
   <div class="tier">
     <div class="prize">{{ t.prize }}</div>
@@ -40,9 +56,7 @@
   </div>
   {% endfor %}
   {% if notes %}
-  <div class="note">
-    {% for n in notes %}· {{ n }}<br>{% endfor %}
-  </div>
+  <div class="note">{% for n in notes %}· {{ n }}{% if not loop.last %}<br>{% endif %}{% endfor %}</div>
   {% endif %}
   <div class="foot">群抽奖助手 GroupRaffle</div>
 </body>

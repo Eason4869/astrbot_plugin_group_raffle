@@ -230,34 +230,21 @@ async def main():
     gs.set_enabled(True)
 
     ev = await run_cmd(p, "抽奖 状态")
-    img = any(any("Image" in type(c).__name__ for c in chain) for _, chain in ctx.sent)
-    print("状态 -> ctx.sent:", [type(c).__name__ for _, c in ctx.sent], "plains:", ev.plain_sent)
-    assert img, "状态卡片图片未通过 context 发出"
+    print("状态 -> plains:", ev.plain_sent[:1])
+    assert ev.plain_sent, "状态未返回文本"
     assert ev.stopped, "状态未 stop_event，可能被 LLM 接管"
 
-    ctx.sent.clear()
     ev = await run_cmd(p, "抽奖 名单")
-    img = any(any("Image" in type(c).__name__ for c in chain) for _, chain in ctx.sent)
-    assert img, "名单卡片图片未通过 context 发出"
+    print("名单 -> plains:", ev.plain_sent[:1])
+    assert ev.plain_sent, "名单未返回文本"
     assert ev.stopped, "名单未 stop_event，可能被 LLM 接管"
 
     # 停用群后，只读信息命令仍应返回
     gs.set_enabled(False)
-    ctx.sent.clear()
     ev = await run_cmd(p, "抽奖 状态")
-    assert ctx.sent or ev.plain_sent, "停用后 状态 未返回结果"
+    assert ev.plain_sent, "停用后 状态 未返回结果"
     assert ev.stopped, "停用后 状态 未 stop_event"
-    print("-> 停用后 状态 仍返回:", bool(ctx.sent or ev.plain_sent))
-
-    # 图片发送失败(如 QQ highway 921)时，必须回退纯文本，保证命令有返回
-    ctx2 = FakeCtx(fail_send=True)
-    p2 = Plugin(ctx2, {"card_enabled": True, "at_enabled": True}, dbp)
-    g2 = p2.store.get(umo)
-    g2.set_enabled(True)
-    ev2 = await run_cmd(p2, "抽奖 状态")
-    assert ev2.plain_sent, "图片发送失败时未回退纯文本"
-    assert ev2.stopped
-    print("-> 图片 921 时已回退纯文本:", ev2.plain_sent[0][:20], "...")
+    print("-> 停用后 状态 仍返回:", bool(ev.plain_sent))
 
     print("OK")
 

@@ -122,7 +122,7 @@ def _fallback_help_text() -> str:
     "astrbot_plugin_group_raffle",
     "Eason4869",
     "群抽奖助手 GroupRaffle：分群配置/定时/活跃度加权/报名/多等次/@/卡片",
-    "0.3.6-beta",
+    "0.3.7-beta",
 )
 class GroupRafflePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -579,48 +579,16 @@ class GroupRafflePlugin(Star):
         return "⏸️ 本群抽奖已停用，定时任务已暂停。"
 
     def _h_status(self, event, args, gs):
-        """本群配置：与帮助一致的信息卡片（含纯文本兜底）。"""
+        """本群配置：纯文本返回（可靠，不依赖图片上传）。"""
         umo = gs.umo
         mode_label = MODE_LABELS.get(gs.mode, gs.mode)
         prizes = "、".join(f"{p['name']}×{p['count']}" for p in gs.prizes) or "（未设置）"
-        cool = (f"{gs.cooldown_days} 天"
-                + ("（跨群）" if gs.cooldown_cross_group else "")
-                + ("，排除近期中奖" if gs.exclude_recent and gs.cooldown_days > 0 else "")
-                if gs.exclude_recent and gs.cooldown_days > 0 else "关闭")
-        sched_desc = gs.describe_schedule() or "未开启定时"
-
-        sections = [
-            {"heading": "参与方式", "items": [
-                f"模式：{mode_label}",
-                f"中奖等次：{prizes}",
-                f"防连中冷却：{cool}",
-                f"排除管理员：{'是' if gs.exclude_admins else '否'}",
-            ]},
-            {"heading": "开奖通知", "items": [
-                f"开奖卡片：{'开启' if gs.card_enabled else '关闭'}",
-                f"@中奖者：{'开启' if gs.at_winners else '关闭'}",
-            ]},
-            {"heading": "定时开奖", "items": [sched_desc]},
-        ]
-        nxt = []
-        try:
-            nxt = preview_next(gs.schedule, 3)
-            if nxt:
-                sections.append({"heading": "未来开奖时间", "items": nxt})
-        except Exception:
-            pass
-        if gs.mode == MODE_ACTIVITY:
-            sections.append({"heading": "活跃度加权", "items": [
-                f"统计窗口：近 {gs.activity_window_days} 天",
-                f"最低发言条数：{gs.activity_min_count} 条",
-            ]})
-        sid = self._sid(umo)
-        signups = self.db.list_signups(umo, sid)
-        if gs.mode == MODE_SIGNUP:
-            sections.append({"heading": "报名情况", "items": [
-                f"当前场次 #{sid}：{len(signups)} 人",
-            ]})
-
+        if gs.exclude_recent and gs.cooldown_days > 0:
+            cool = f"{gs.cooldown_days} 天"
+            cool += "（跨群）" if gs.cooldown_cross_group else ""
+            cool += "，排除近期中奖"
+        else:
+            cool = "关闭"
         L = [
             "🎰 本群抽奖配置",
             f"状态：{'启用' if gs.enabled else '停用'}",
@@ -630,20 +598,22 @@ class GroupRafflePlugin(Star):
             f"排除管理员：{'是' if gs.exclude_admins else '否'}",
             f"开奖卡片：{'开启' if gs.card_enabled else '关闭'}",
             f"@中奖者：{'开启' if gs.at_winners else '关闭'}",
-            f"定时开奖：{sched_desc}",
+            f"定时开奖：{gs.describe_schedule()}",
         ]
-        if nxt:
-            L.append("未来开奖：\n" + "\n".join(f"· {x}" for x in nxt))
+        if gs.mode == MODE_ACTIVITY:
+            L.append(f"活跃度加权：近 {gs.activity_window_days} 天"
+                     f"（最低 {gs.activity_min_count} 条）")
+        try:
+            nxt = preview_next(gs.schedule, 3)
+            if nxt:
+                L.append("未来开奖：\n" + "\n".join(f"· {x}" for x in nxt))
+        except Exception:
+            pass
+        sid = self._sid(umo)
+        signups = self.db.list_signups(umo, sid)
         if gs.mode == MODE_SIGNUP:
             L.append(f"当前报名场次 #{sid}：{len(signups)} 人")
-        return {
-            "card": {
-                "title": "🎰 本群抽奖配置",
-                "subtitle": f"{group_id_of(umo)} · {mode_label}",
-                "sections": sections,
-            },
-            "fallback": "\n".join(L),
-        }
+        return "\n".join(L)
 
     def _h_join(self, event, args, gs):
         umo = gs.umo
@@ -671,47 +641,31 @@ class GroupRafflePlugin(Star):
             members = self.db.list_signups(umo, sid)
             if not members:
                 return f"当前场次 #{sid} 还没有人报名，发送「抽奖 报名」参与。"
-            shown = members[:40]
-            items = [f"{n}" for _, n in shown]
-            more = f"（仅显示前 {len(shown)} 名）" if len(members) > 40 else ""
-            fb = f"📝 群 {gid} 场次 #{sid} 报名 {len(members)} 人：\n"
-            fb += "\n".join(f"{i}. {n}" for i, (_, n) in enumerate(shown, 1)) + more
-            return {
-                "card": {"title": "📝 抽奖报名名单",
-                         "subtitle": f"{gid} · 场次 #{sid} · {len(members)} 人",
-                         "sections": [{"heading": None, "items": items}]},
-                "fallback": fb,
-            }
+            shown = members[:30]
+            lines = [f"📝 群 {gid} 场次 #{sid} 报名 {len(members)} 人："]
+            lines += [f"{i}. {n}" for i, (_, n) in enumerate(shown, 1)]
+            if len(members) > 30:
+                lines.append(f"…等共 {len(members)} 人（仅显示前 30）")
+            return "\n".join(lines)
         if gs.mode == MODE_ACTIVITY:
             counts = self.tracker.counts(umo, gs.activity_window_days)
             if not counts:
                 return f"近 {gs.activity_window_days} 天暂无活跃记录（插件安装后才开始统计）。"
             name_map = dict(self.db.list_users(umo))
             top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:20]
-            items = [f"{name_map.get(uid, uid)}：{c} 条" for uid, c in top]
-            fb = f"📊 群 {gid} 近 {gs.activity_window_days} 天活跃榜（前 {len(top)} 名）：\n"
-            fb += "\n".join(f"{i}. {name_map.get(uid, uid)}：{c} 条"
-                            for i, (uid, c) in enumerate(top, 1))
-            return {
-                "card": {"title": "📊 活跃榜",
-                         "subtitle": f"{gid} · 近 {gs.activity_window_days} 天",
-                         "sections": [{"heading": f"前 {len(top)} 名", "items": items}]},
-                "fallback": fb,
-            }
+            lines = [f"📊 群 {gid} 近 {gs.activity_window_days} 天活跃榜（前 {len(top)} 名）："]
+            lines += [f"{i}. {name_map.get(uid, uid)}：{c} 条"
+                      for i, (uid, c) in enumerate(top, 1)]
+            return "\n".join(lines)
         users = self.db.list_users(umo)
         if not users:
             return "插件还未观测到本群成员（群友发言后自动记录）。"
-        shown = users[:40]
-        items = [n for _, n in shown]
-        more = f"（仅显示前 {len(shown)} 名）" if len(users) > 40 else ""
-        fb = f"👥 群 {gid} 已观测成员 {len(users)} 人：\n"
-        fb += "\n".join(f"{i}. {n}" for i, (_, n) in enumerate(shown, 1)) + more
-        return {
-            "card": {"title": "👥 群成员",
-                     "subtitle": f"{gid} · {len(users)} 人",
-                     "sections": [{"heading": None, "items": items}]},
-            "fallback": fb,
-        }
+        shown = users[:30]
+        lines = [f"👥 群 {gid} 已观测成员 {len(users)} 人："]
+        lines += [f"{i}. {n}" for i, (_, n) in enumerate(shown, 1)]
+        if len(users) > 30:
+            lines.append(f"…等共 {len(users)} 人（仅显示前 30）")
+        return "\n".join(lines)
 
     async def _h_draw(self, event, args, gs):
         prizes = gs.prizes

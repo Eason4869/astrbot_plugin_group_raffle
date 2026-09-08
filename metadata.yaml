@@ -2,7 +2,7 @@ name: astrbot_plugin_group_raffle
 display_name: 群抽奖助手
 desc: 分群独立配置的群聊抽奖：手动/定时开奖、活跃度加权、报名参与、多等次多名额、防连中、@中奖者、自定义模板、卡片渲染、可视化管理面板。
 short_desc: 分群配置的群聊抽奖助手
-version: 0.3.6-beta
+version: 0.3.7-beta
 author: Eason4869
 repo: https://github.com/Eason4869/astrbot_plugin_group_raffle
 astrbot_version: ">=4.13.0"

@@ -61,7 +61,7 @@ async def render_result_card(star, tier_results, group_name, when_str,
         "notes": (list(notes or []) + (["※ 模拟开奖，未记录中奖、未清空报名"] if simulate else [])),
     }
     # 1) 核心内置 html_render
-    path = await _render_via_core(star, "card.html", data, width=430)
+    path = await _render_via_core(star, "card.html", data, width=520)
     if path:
         return path
     # 2) Pillow 兜底
@@ -202,51 +202,85 @@ def _render_pillow(tier_results, group_name, when_str, mode_label, pool_size,
                    simulate: bool = False) -> Optional[str]:
     from PIL import Image, ImageDraw
 
-    W = 460
-    pad = 28
+    W = 520
+    px = 24                     # 左右内边距
+    ORANGE = (230, 126, 34)
+    ORANGE_D = (201, 98, 12)
+    BROWN = (61, 34, 0)
+    GOLD = (154, 106, 58)
+    BG_TOP = (255, 247, 236)
     title_text = "🧪 模拟开奖（不记录）" if simulate else "🎊 开奖结果 🎊"
-    f_title = _find_cjk_font(26 if simulate else 30)
-    f_sub = _find_cjk_font(14)
-    f_prize = _find_cjk_font(17)
-    f_name = _find_cjk_font(21)
 
-    tmp = Image.new("RGB", (W, 10), (255, 247, 236))
+    f_title = _find_cjk_font(26)
+    f_banner_sub = _find_cjk_font(13)
+    f_meta = _find_cjk_font(13)
+    f_prize = _find_cjk_font(15)
+    f_name = _find_cjk_font(22)
+
+    # 顶部横幅（标题 + 副标题），高度按两行预留
+    banner_h = 92
+    meta_h = 44
+    # 预测量高
+    tmp = Image.new("RGB", (W, 10), BG_TOP)
     d0 = ImageDraw.Draw(tmp)
-    blocks = []
-    y = 24 + 44 + 30
+    y = banner_h + meta_h
     for t in tier_results:
         names = "、".join(n for _, n in t.winners) or "—"
         if t.shortage:
             names += f"（缺 {t.shortage} 名）"
-        wrapped = _wrap_text(d0, names, f_name, W - 2 * pad - 20)
-        blocks.append((t.prize, wrapped))
-        y += 18 + len(wrapped) * 30 + 18
-    y += 34
-    H = y
+        lines = _wrap_text(d0, names, f_name, W - 2 * px - 36)
+        y += 26 + len(lines) * 34 + 26          # prize pill + names + 间距
+    y += 26
+    H = y + 26
 
-    img = Image.new("RGB", (W, H), (255, 247, 236))
+    img = Image.new("RGB", (W, H), (255, 250, 244))
     d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, W, 6], fill=(230, 126, 34))
 
-    def center(cy, text, font, fill):
-        w = d.textbbox((0, 0), text, font=font)
-        d.text(((W - (w[2] - w[0])) / 2, cy), text, font=font, fill=fill)
+    # ---- 顶部横幅 ----
+    d.rounded_rectangle([12, 12, W - 12, 12 + banner_h], radius=16, fill=ORANGE)
+    d.rounded_rectangle([12, 12, W - 12, 12 + banner_h], radius=16,
+                        outline=(255, 190, 120), width=2)
+    tsize = d.textbbox((0, 0), title_text, font=f_title)
+    d.text(((W - (tsize[2] - tsize[0])) / 2, 26), title_text,
+           font=f_title, fill=(255, 255, 255))
+    sub = f"{group_name or '本群'} · {mode_label} · 候选 {pool_size} 人 · {when_str}"
+    ssize = d.textbbox((0, 0), sub, font=f_banner_sub)
+    d.text(((W - (ssize[2] - ssize[0])) / 2, 12 + banner_h - 32), sub,
+           font=f_banner_sub, fill=(255, 243, 230))
 
-    center(20, title_text, f_title, (194, 87, 26))
-    center(66, f"{group_name or '本群'} · {mode_label} · 候选{pool_size}人 · {when_str}",
-           f_sub, (154, 106, 58))
+    # ---- 中奖名单分隔提示 ----
+    y = 12 + banner_h + 20
+    d.text(((W - d.textbbox((0, 0), "— 中奖名单 —", font=f_meta)[2]) / 2, y),
+           "— 中奖名单 —", font=f_meta, fill=GOLD)
 
-    y = 104
-    for prize, wrapped in blocks:
-        bh = 18 + len(wrapped) * 30 + 12
-        d.rounded_rectangle([pad - 8, y - 6, W - pad + 8, y + bh], radius=12, fill=(255, 255, 255))
-        d.text((pad + 6, y), f"【{prize}】", font=f_prize, fill=(194, 87, 26))
-        y += 26
-        for line in wrapped:
-            d.text((pad + 6, y), line, font=f_name, fill=(61, 34, 0))
-            y += 30
-        y += 14
-    center(H - 28, "群抽奖助手 GroupRaffle", f_sub, (176, 138, 94))
+    # ---- 每个等次 ----
+    y += 34
+    for t in tier_results:
+        names = "、".join(n for _, n in t.winners) or "—"
+        if t.shortage:
+            names += f"（缺 {t.shortage} 名）"
+        lines = _wrap_text(d, names, f_name, W - 2 * px - 36)
+        bh = 20 + len(lines) * 34 + 20
+        # 浅色横条背景
+        d.rounded_rectangle([px, y, W - px, y + bh], radius=14, fill=(255, 255, 255))
+        d.rounded_rectangle([px, y, W - px, y + bh], radius=14,
+                            outline=(245, 223, 196), width=1)
+        # 等次胶囊
+        prize_lbl = t.prize
+        pw = d.textbbox((0, 0), prize_lbl, font=f_prize)[2]
+        pill = (px + 14, y + 12)
+        d.rounded_rectangle([pill[0] - 10, pill[1] - 4, pill[0] + pw + 10, pill[1] + 24],
+                            radius=999, fill=ORANGE)
+        d.text(pill, prize_lbl, font=f_prize, fill=(255, 255, 255))
+        ny = y + 48
+        for line in lines:
+            d.text((px + 16, ny), line, font=f_name, fill=BROWN)
+            ny += 34
+        y += bh + 14
+
+    # ---- 底部 ----
+    d.text(((W - d.textbbox((0, 0), "群抽奖助手 GroupRaffle", font=f_meta)[2]) / 2,
+            H - 34), "群抽奖助手 GroupRaffle", font=f_meta, fill=(176, 138, 94))
 
     out = os.path.join(_out_dir(), _uniq_name("raffle_card.png"))
     img.save(out)
