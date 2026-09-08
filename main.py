@@ -122,7 +122,7 @@ def _fallback_help_text() -> str:
     "astrbot_plugin_group_raffle",
     "Eason4869",
     "群抽奖助手 GroupRaffle：分群配置/定时/活跃度加权/报名/多等次/@/卡片",
-    "0.3.9-beta",
+    "0.4.0",
 )
 class GroupRafflePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
