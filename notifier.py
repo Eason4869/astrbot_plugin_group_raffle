@@ -99,6 +99,7 @@ async def send_result(
 ):
     """发送开奖消息。返回 (used_at: bool, used_card: bool)。"""
     from astrbot.core.message.components import Plain, Image
+    from astrbot.core.message.message_event_result import MessageChain
 
     tier_lines = []
     for t in tier_results:
@@ -140,13 +141,10 @@ async def send_result(
                 chain.append(at)
 
     try:
-        await context.send_message(umo, chain)
+        await context.send_message(umo, MessageChain(chain=chain))
         return (do_at, bool(card_image_path))
     except Exception:
         # 整体发送失败：去掉 @ 与图片，纯文本兜底
-        fallback = [Plain(text)]
-        if want_at and do_at:
-            # @ 失败时把昵称写进文本已包含 @name；再补发提示不必要
-            pass
+        fallback = MessageChain(chain=[Plain(text)])
         await context.send_message(umo, fallback)
         return (False, False)

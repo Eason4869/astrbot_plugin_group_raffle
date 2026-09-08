@@ -2,6 +2,19 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/) 规范。
 
+## [0.3.5-beta] - 2026-09-12
+
+> 测试版：为便于与正式版区分，版本号带 `-beta` 后缀；验证稳定后再并入正式版。
+
+### 修复
+- **开奖/模拟发送失败 `'list' object has no attribute 'chain'`**（根治开奖/模拟
+  “无返回”）：`context.send_message` 要求 `MessageChain`，此前传的是普通 list，
+  AstrBot v4.28.0 会抛错，且错误兜底同样用 list 再次失败 → 群内无任何消息 →
+  被 LLM 接管。已把所有直发改为 `MessageChain(chain=[...])`（notifier 开奖链
+  与文本兜底、do_draw 定时失败与异常兜底）。
+- **`抽奖 状态`/`名单` 恢复为与 `抽奖 帮助` 相同的信息卡片样式返回**（含纯文本
+  兜底），事件仍 stop_event 防止 LLM 接管。
+
 ## [0.3.4-beta] - 2026-09-12
 
 > 测试版：为便于与正式版区分，版本号带 `-beta` 后缀；验证稳定后再并入正式版。

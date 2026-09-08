@@ -103,6 +103,13 @@ def _install_stubs():
 
     comp.Plain = _Plain
     comp.Image = _Image
+    mer_mod = make_pkg("astrbot.core.message.message_event_result")
+
+    class _MessageChain:
+        def __init__(self, chain=None):
+            self.chain = list(chain) if chain is not None else []
+
+    mer_mod.MessageChain = _MessageChain
     make_pkg("astrbot.core.star")
     sm = make_pkg("astrbot.core.star.star_handler")
     sm.star_handlers_registry = types.SimpleNamespace(
@@ -136,7 +143,8 @@ class FakeCtx:
         pass
 
     async def send_message(self, umo, chain):
-        self.sent.append((umo, list(chain)))
+        comps = chain.chain if hasattr(chain, "chain") else chain
+        self.sent.append((umo, list(comps)))
 
 
 class Plugin(M.GroupRafflePlugin):
