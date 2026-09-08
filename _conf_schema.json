@@ -1,0 +1,69 @@
+{
+  "enabled_groups_mode": {
+    "description": "群启用模式。blacklist=所有群可用，黑名单内的群禁用；whitelist=仅白名单内的群可用。各群也可用 /抽奖 启用|停用 单独开关。",
+    "type": "string",
+    "default": "blacklist",
+    "options": ["blacklist", "whitelist"],
+    "hint": "blacklist / whitelist"
+  },
+  "group_whitelist": {
+    "description": "群白名单（whitelist 模式生效）。填群号，多个用英文逗号分隔，例如 123456,789012。",
+    "type": "list",
+    "items": { "type": "string" },
+    "default": []
+  },
+  "group_blacklist": {
+    "description": "群黑名单（blacklist 模式生效）。填群号，多个用英文逗号分隔。",
+    "type": "list",
+    "items": { "type": "string" },
+    "default": []
+  },
+  "admins": {
+    "description": "额外管理员 QQ/用户号列表（群管理员与群主自动拥有权限，此处用于补充）。",
+    "type": "list",
+    "items": { "type": "string" },
+    "default": []
+  },
+  "card_enabled": {
+    "description": "全局默认卡片渲染开关。各群可用 /抽奖 卡片 开|关 单独覆盖。需要安装 astrbot_plugin_htmlrender；未安装时自动降级。",
+    "type": "bool",
+    "default": false
+  },
+  "at_enabled": {
+    "description": "全局默认是否 @ 中奖者。不支持 @ 的平台/群会自动降级为文本昵称。",
+    "type": "bool",
+    "default": true
+  },
+  "default_template": {
+    "description": "默认中奖消息模板。可用占位符：<winners> <count> <group> <time> <contact>。",
+    "type": "string",
+    "default": "🎉 恭喜 <winners> 中奖！<contact>请获奖者留意群内通知并联系管理员领取奖品。"
+  },
+  "contact": {
+    "description": "模板里 <contact> 替换为的联系方式文本，例如：请联系 @管理员 领取，或 QQ:10001。",
+    "type": "string",
+    "default": ""
+  },
+  "default_mode": {
+    "description": "新启用群的默认参与模式：equal=观测到的活跃成员等权；activity=活跃度加权；signup=仅报名成员参与。",
+    "type": "string",
+    "default": "equal",
+    "options": ["equal", "activity", "signup"],
+    "hint": "equal / activity / signup"
+  },
+  "daily_msg_cap": {
+    "description": "活跃度统计防刷：同一用户每天计入的最大有效消息条数。",
+    "type": "int",
+    "default": 30
+  },
+  "msg_min_gap_seconds": {
+    "description": "防刷：同一用户两条消息间隔小于该秒数时不计入活跃度。",
+    "type": "int",
+    "default": 5
+  },
+  "data_retention_days": {
+    "description": "活跃度明细保留天数（超过后自动清理；按天聚合的统计不受影响）。0 表示不清理。",
+    "type": "int",
+    "default": 60
+  }
+}
