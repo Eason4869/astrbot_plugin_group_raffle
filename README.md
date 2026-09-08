@@ -1,7 +1,11 @@
+<div align="center">
+
 ![:name](https://count.getloli.com/@astrbot_plugin_group_raffle?name=astrbot_plugin_group_raffle&theme=minecraft&padding=6&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
 
 
 # 群抽奖助手 GroupRaffle
+
+</div>
 
 AstrBot 群聊抽奖插件：**每个群独立配置**，支持手动/定时开奖、三种参与模式、多等次多名额、活跃度加权、防连中、@中奖者、自定义消息模板和开奖卡片。
 
