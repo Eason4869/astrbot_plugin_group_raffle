@@ -10,10 +10,17 @@
 import asyncio
 import html
 import os
+import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+
+
+def _uniq_name(base: str) -> str:
+    """每次渲染生成唯一文件名，避免并发覆盖旧文件（覆盖可能使上传读到损坏/截断文件）。"""
+    return f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}_{base}"
 
 
 def _out_dir() -> str:
@@ -42,7 +49,7 @@ async def render_result_card(star, tier_results, group_name, when_str,
         "mode_label": html.escape(mode_label),
         "pool_size": pool_size,
         "simulate": simulate,
-        "title": "🧪 模拟开奖（不记录）" if simulate else "🎊 开奖结果 🎊",
+        "title": "模拟开奖（结果不记录）" if simulate else "开奖结果",
         "tiers": [
             {
                 "prize": t.prize,
@@ -53,18 +60,23 @@ async def render_result_card(star, tier_results, group_name, when_str,
         ],
         "notes": (list(notes or []) + (["※ 模拟开奖，未记录中奖、未清空报名"] if simulate else [])),
     }
-    # 1) 核心内置 html_render
-    path = await _render_via_core(star, "card.html", data, width=430)
-    if path:
-        return path
-    # 2) Pillow 兜底
+    # 结果卡片优先用 Pillow 本地绘制：布局完全可控（居中横幅+等次块），
+    # 避免 html_render 在某些环境下输出“内容挤在左上角”的整页截图。
+    # Pillow 不可用时才回退核心内置 html_render。
     try:
-        return await asyncio.to_thread(
+        p = await asyncio.to_thread(
             _render_pillow, tier_results, group_name, when_str, mode_label,
             pool_size, simulate,
         )
+        if p:
+            return p
     except Exception:
-        return None
+        pass
+    # 兜底：核心内置 html_render
+    path = await _render_via_core(star, "card.html", data, width=520)
+    if path:
+        return path
+    return None
 
 
 async def render_help_image(star, rows: list[dict]) -> Optional[str]:
@@ -75,6 +87,34 @@ async def render_help_image(star, rows: list[dict]) -> Optional[str]:
         return path
     try:
         return await asyncio.to_thread(_render_help_pillow, rows)
+    except Exception:
+        return None
+
+
+async def render_info_card(star, title: str, subtitle: str,
+                           sections: list[dict]) -> Optional[str]:
+    """通用信息卡片（状态 / 名单等），与帮助卡同一视觉风格。
+
+    sections: [{heading: str|None, items: [str, ...]}, ...]
+    返回图片路径或 None。
+    """
+    safe = [
+        {
+            "heading": html.escape(str(s.get("heading") or "")),
+            "items": [html.escape(str(x)) for x in (s.get("items") or [])],
+        }
+        for s in sections
+    ]
+    data = {
+        "title": html.escape(title),
+        "subtitle": html.escape(subtitle or ""),
+        "sections": safe,
+    }
+    path = await _render_via_core(star, "info.html", data, width=480)
+    if path:
+        return path
+    try:
+        return await asyncio.to_thread(_render_info_pillow, title, subtitle, sections)
     except Exception:
         return None
 
@@ -91,6 +131,7 @@ async def _render_via_core(star, template_name: str, data: dict, width: int) -> 
         result = await star.html_render(
             tmpl,
             data,
+            return_url=False,  # 让核心直接下载成 PNG 文件路径，而不是返回 URL
             options={
                 "width": width,
                 "full_page": True,
@@ -115,7 +156,7 @@ def _coerce_to_path(result) -> Optional[str]:
         return s
     # 部分实现返回 bytes / data-url，则落盘
     if isinstance(result, (bytes, bytearray)):
-        p = os.path.join(_out_dir(), "card.png")
+        p = os.path.join(_out_dir(), _uniq_name("card.png"))
         with open(p, "wb") as f:
             f.write(result)
         return p
@@ -164,55 +205,158 @@ def _wrap_text(draw, text, font, max_w):
 
 def _render_pillow(tier_results, group_name, when_str, mode_label, pool_size,
                    simulate: bool = False) -> Optional[str]:
+    """Pillow 绘制开奖卡片：更高分辨率(780px)保证清晰；不使用 emoji（中文字体
+    无彩色 emoji，会渲染成方框），用纯文本标题避免失效。"""
     from PIL import Image, ImageDraw
 
-    W = 460
-    pad = 28
-    title_text = "🧪 模拟开奖（不记录）" if simulate else "🎊 开奖结果 🎊"
-    f_title = _find_cjk_font(26 if simulate else 30)
-    f_sub = _find_cjk_font(14)
-    f_prize = _find_cjk_font(17)
-    f_name = _find_cjk_font(21)
+    W = 780
+    px = 36                     # 左右内边距
+    ORANGE = (230, 126, 34)
+    BROWN = (61, 34, 0)
+    GOLD = (154, 106, 58)
+    BG = (255, 250, 244)
+    LINE = (245, 223, 196)
+    title_text = "模拟开奖（结果不记录）" if simulate else "开奖结果"
 
-    tmp = Image.new("RGB", (W, 10), (255, 247, 236))
+    f_title = _find_cjk_font(42)
+    f_banner_sub = _find_cjk_font(21)
+    f_meta = _find_cjk_font(20)
+    f_prize = _find_cjk_font(25)
+    f_name = _find_cjk_font(34)
+
+    banner_h = 136
+    banner_rad = 22
+
+    # ---- 预测量高 ----
+    tmp = Image.new("RGB", (W, 10), BG)
     d0 = ImageDraw.Draw(tmp)
-    blocks = []
-    y = 24 + 44 + 30
+    y = banner_h + 46
     for t in tier_results:
         names = "、".join(n for _, n in t.winners) or "—"
         if t.shortage:
             names += f"（缺 {t.shortage} 名）"
-        wrapped = _wrap_text(d0, names, f_name, W - 2 * pad - 20)
-        blocks.append((t.prize, wrapped))
-        y += 18 + len(wrapped) * 30 + 18
-    y += 34
-    H = y
+        lines = _wrap_text(d0, names, f_name, W - 2 * px - 60)
+        y += 34 + len(lines) * 50 + 36
+    y += 30
+    H = y + 52
 
-    img = Image.new("RGB", (W, H), (255, 247, 236))
+    img = Image.new("RGB", (W, H), BG)
+    d = ImageDraw.Draw(img)
+
+    # ---- 顶部横幅 ----
+    d.rounded_rectangle([16, 16, W - 16, 16 + banner_h], radius=banner_rad,
+                        fill=ORANGE)
+    d.rounded_rectangle([16, 16, W - 16, 16 + banner_h], radius=banner_rad,
+                        outline=(255, 200, 130), width=3)
+    tsize = d.textbbox((0, 0), title_text, font=f_title)
+    d.text(((W - (tsize[2] - tsize[0])) / 2, 30), title_text,
+           font=f_title, fill=(255, 255, 255))
+    sub = f"{group_name or '本群'} · {mode_label} · 候选 {pool_size} 人 · {when_str}"
+    ssize = d.textbbox((0, 0), sub, font=f_banner_sub)
+    d.text(((W - (ssize[2] - ssize[0])) / 2, 16 + banner_h - 46), sub,
+           font=f_banner_sub, fill=(255, 243, 230))
+
+    # ---- 中奖名单分隔 ----
+    y = 16 + banner_h + 26
+    d.text(((W - d.textbbox((0, 0), "— 中奖名单 —", font=f_meta)[2]) / 2, y),
+           "— 中奖名单 —", font=f_meta, fill=GOLD)
+
+    # ---- 每个等次 ----
+    y += 46
+    for t in tier_results:
+        names = "、".join(n for _, n in t.winners) or "—"
+        if t.shortage:
+            names += f"（缺 {t.shortage} 名）"
+        lines = _wrap_text(d, names, f_name, W - 2 * px - 60)
+        bh = 30 + len(lines) * 50 + 34
+        d.rounded_rectangle([px, y, W - px, y + bh], radius=20, fill=(255, 255, 255))
+        d.rounded_rectangle([px, y, W - px, y + bh], radius=20,
+                            outline=LINE, width=2)
+        prize_lbl = t.prize
+        pw = d.textbbox((0, 0), prize_lbl, font=f_prize)[2]
+        pill_x = px + 20
+        pill_y = y + 18
+        d.rounded_rectangle([pill_x - 14, pill_y - 6, pill_x + pw + 14, pill_y + 40],
+                            radius=999, fill=ORANGE)
+        d.text((pill_x, pill_y + 3), prize_lbl, font=f_prize, fill=(255, 255, 255))
+        ny = y + 74
+        for line in lines:
+            d.text((px + 24, ny), line, font=f_name, fill=BROWN)
+            ny += 50
+        y += bh + 22
+
+    # ---- 底部 ----
+    d.text(((W - d.textbbox((0, 0), "群抽奖助手 GroupRaffle", font=f_meta)[2]) / 2,
+            H - 50), "群抽奖助手 GroupRaffle", font=f_meta, fill=(176, 138, 94))
+
+    out = os.path.join(_out_dir(), _uniq_name("raffle_card.png"))
+    img.save(out)
+    return out
+
+
+# ---------------- Pillow 兜底（信息卡：状态/名单） ----------------
+
+def _render_info_pillow(title: str, subtitle: str,
+                        sections: list[dict]) -> Optional[str]:
+    from PIL import Image, ImageDraw
+
+    W = 480
+    pad = 26
+    f_title = _find_cjk_font(26)
+    f_sub = _find_cjk_font(13)
+    f_head = _find_cjk_font(16)
+    f_item = _find_cjk_font(15)
+
+    tmp = Image.new("RGB", (W, 10), (255, 250, 243))
+    d0 = ImageDraw.Draw(tmp)
+
+    # 预估高度
+    blocks = []
+    y = 20 + 40 + 10 + (24 if subtitle else 0)
+    for s in sections:
+        lines = []
+        head = s.get("heading")
+        head_h = 30 if head else 8
+        y += head_h
+        for it in (s.get("items") or []):
+            wrapped = _wrap_text(d0, "· " + it, f_item, W - 2 * pad - 24)
+            lines.append(wrapped)
+            y += len(wrapped) * 24 + 4
+        blocks.append((head, lines))
+        y += 12
+    H = y + 34
+
+    img = Image.new("RGB", (W, H), (255, 250, 243))
     d = ImageDraw.Draw(img)
     d.rectangle([0, 0, W, 6], fill=(230, 126, 34))
 
-    def center(cy, text, font, fill):
+    def center_x(cy, text, font, fill):
         w = d.textbbox((0, 0), text, font=font)
         d.text(((W - (w[2] - w[0])) / 2, cy), text, font=font, fill=fill)
 
-    center(20, title_text, f_title, (194, 87, 26))
-    center(66, f"{group_name or '本群'} · {mode_label} · 候选{pool_size}人 · {when_str}",
-           f_sub, (154, 106, 58))
+    center_x(18, title, f_title, (194, 87, 26))
+    cy = 52
+    if subtitle:
+        center_x(cy, subtitle, f_sub, (154, 106, 58))
+        cy = 76
+    y = cy + 6
+    for head, lines in blocks:
+        if head:
+            d.rounded_rectangle([pad - 10, y - 4, W - pad + 10, y + 27], radius=8,
+                                fill=(255, 233, 214))
+            d.text((pad, y + 2), head, font=f_head, fill=(160, 74, 18))
+            y += 36
+        else:
+            y += 6
+        for wrapped in lines:
+            for line in wrapped:
+                d.text((pad + 8, y), line, font=f_item, fill=(58, 42, 24))
+                y += 24
+            y += 4
+        y += 10
+    center_x(H - 28, "群抽奖助手 GroupRaffle", f_sub, (176, 138, 94))
 
-    y = 104
-    for prize, wrapped in blocks:
-        bh = 18 + len(wrapped) * 30 + 12
-        d.rounded_rectangle([pad - 8, y - 6, W - pad + 8, y + bh], radius=12, fill=(255, 255, 255))
-        d.text((pad + 6, y), f"【{prize}】", font=f_prize, fill=(194, 87, 26))
-        y += 26
-        for line in wrapped:
-            d.text((pad + 6, y), line, font=f_name, fill=(61, 34, 0))
-            y += 30
-        y += 14
-    center(H - 28, "群抽奖助手 GroupRaffle", f_sub, (176, 138, 94))
-
-    out = os.path.join(_out_dir(), "raffle_card.png")
+    out = os.path.join(_out_dir(), _uniq_name("info.png"))
     img.save(out)
     return out
 
@@ -250,7 +394,7 @@ def _render_help_pillow(rows: list[dict]) -> Optional[str]:
         w = d.textbbox((0, 0), text, font=font)
         d.text(((W - (w[2] - w[0])) / 2, cy), text, font=font, fill=fill)
 
-    center_x(20, "🎮 群抽奖助手 · 命令帮助", f_title, (194, 87, 26))
+    center_x(20, "群抽奖助手 · 命令帮助", f_title, (194, 87, 26))
     center_x(56, "主命令：抽奖（英文别名 raffle，等价，如 /raffle 开奖）", f_sub, (154, 106, 58))
 
     # 表头
@@ -280,6 +424,6 @@ def _render_help_pillow(rows: list[dict]) -> Optional[str]:
             ty += 20
         y += rh
 
-    out = os.path.join(_out_dir(), "help.png")
+    out = os.path.join(_out_dir(), _uniq_name("help.png"))
     img.save(out)
     return out

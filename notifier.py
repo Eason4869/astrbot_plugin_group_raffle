@@ -1,12 +1,15 @@
 # -*- coding: utf-8 -*-
 """群抽奖助手 GroupRaffle —— 消息构造与发送
 
-- 模板占位符：<winners> <count> <group> <time> <contact>
-- @ 能力按平台降级：OneBot 系支持 At 组件；不支持时（或发送失败）降级为纯文本昵称。
-- 卡片是一张图片；真实 @ 只放在卡片外的消息链里。
+规则（与产品约定一致）：
+- @ 开启且平台支持时：使用真实 At 组件，并置于消息【文首】（每个 At 后跟空格，
+  参考 astrbot_plugin_bilibili 的写法）；文本里的 <winners> 不再写成 "@名字"（避免假 @）。
+- 平台不支持真实 @ 时：降级为文本昵称（<winners> 替换为 @名字）。
+- 卡片开启时：只发卡片图片（中奖结果在图片内），不再追加文字版；
+  真实 @ 独立于卡片之外（卡片图片前的 At）。
+- 发送失败：若为图片(整体)发送失败，重试“真实@ + 纯文本”；再失败则纯文本兜底。
 """
 
-import datetime
 from typing import Optional
 
 try:
@@ -14,7 +17,31 @@ try:
 except ImportError:  # 平铺加载
     from activity import TZ  # type: ignore
 
-# 支持真实 @ 的平台前缀（aiocqhttp=OneBot；aiocqhttp 也覆盖 NapCat/Lagrange 等）
+
+def _components_module():
+    """优先公开 API 路径，失败回退核心内部路径。"""
+    try:
+        from astrbot.api import message_components as mc
+    except Exception:
+        try:
+            from astrbot.core.message import components as mc
+        except Exception:
+            mc = None
+    return mc
+
+
+def _result_cls():
+    try:
+        from astrbot.core.message.message_event_result import MessageEventResult
+    except Exception:
+        try:
+            from astrbot.api.message_event_result import MessageEventResult
+        except Exception:
+            MessageEventResult = None
+    return MessageEventResult
+
+
+# 支持真实 @ 的适配器【类型名】（aiocqhttp=OneBot；覆盖 NapCat/Lagrange/LLOneBot 等）
 AT_CAPABLE_PLATFORMS = ("aiocqhttp",)
 
 
@@ -27,35 +54,68 @@ def group_id_of(umo: str) -> str:
     return parts[2] if len(parts) >= 3 else (parts[-1] if parts else umo)
 
 
-def can_at(umo: str) -> bool:
-    return platform_of(umo) in AT_CAPABLE_PLATFORMS
+def platform_supports_at(context, umo: str) -> bool:
+    """判断当前平台是否支持真实 @。
 
-
-def _at_component(uid: str):
-    """尽力构造 At 组件，失败返回 None。"""
+    注意：unified_msg_origin 首段是平台适配器的【配置 id】（如用户自定义的
+    “EasonBot”），不是类型名；必须通过 context 找到该平台实例，看它的
+    meta().name（适配器类型名，如 aiocqhttp）是否支持 @。
+    """
+    tok = platform_of(umo)
+    if tok in AT_CAPABLE_PLATFORMS:
+        return True
     try:
-        from astrbot.core.message.components import At
-
-        try:
-            return At(qq=str(uid))
-        except Exception:
-            pass
-        try:
-            return At(user_id=str(uid))
-        except Exception:
-            pass
+        pm = getattr(context, "platform_manager", None)
+        insts = (list(getattr(pm, "platform_insts", None) or [])
+                 if pm is not None else [])
+        for p in insts:
+            try:
+                meta = p.meta()
+            except Exception:
+                continue
+            if getattr(meta, "id", None) == tok:
+                return getattr(meta, "name", "") in AT_CAPABLE_PLATFORMS
     except Exception:
         pass
-    try:  # 兜底：个别版本组件路径不同
-        from astrbot.api.message_components import At  # type: ignore
+    # 找不到实例时：默认尝试真实 @（OneBot 类适配器的 id 是任意自定义名，
+    # 若确实不支持，发送失败会自动降级为文本，不会造成卡死）。
+    return True
 
-        return At(qq=str(uid))
+
+def can_at(umo: str) -> bool:
+    return True  # 兼容旧调用：真实能力以 platform_supports_at 判定为准
+
+
+def build_at_parts(uid_list: list, mc=None) -> list:
+    """构造 [At(qq), Plain(" "), ...] 置于文首。mc 缺失则返回空。"""
+    mc = mc or _components_module()
+    if mc is None:
+        return []
+    try:
+        At = mc.At
+        Plain = mc.Plain
     except Exception:
-        return None
+        return []
+    parts = []
+    for uid, _ in uid_list:
+        try:
+            parts.append(At(qq=int(str(uid))))
+        except Exception:
+            try:
+                parts.append(At(qq=str(uid)))
+            except Exception:
+                try:
+                    parts.append(At(user_id=str(uid)))
+                except Exception:
+                    continue
+        parts.append(Plain(" "))
+    return parts
 
 
 def render_template(template: str, winners_text: str, count: int, group_name: str,
-                    contact: str, when: Optional[datetime.datetime] = None) -> str:
+                    contact: str, when=None) -> str:
+    import datetime
+
     when = when or datetime.datetime.now(TZ)
     return (
         (template or "")
@@ -67,7 +127,7 @@ def render_template(template: str, winners_text: str, count: int, group_name: st
     )
 
 
-def build_text(tier_lines: list[str], body: str, notes: list[str],
+def build_text(tier_lines: list, body: str, notes: list,
                simulate: bool = False) -> str:
     head = "🧪 模拟开奖（结果不会记录）🧪" if simulate else "🎊 开奖结果 🎊"
     parts = [head, ""]
@@ -84,6 +144,34 @@ def build_text(tier_lines: list[str], body: str, notes: list[str],
     return "\n".join(parts).strip()
 
 
+def _image_component(path: str, mc=None):
+    mc = mc or _components_module()
+    if mc is None:
+        return None
+    Image = getattr(mc, "Image", None)
+    if Image is None:
+        return None
+    try:
+        return Image.fromFileSystem(path)
+    except Exception:
+        pass
+    try:
+        return Image(file=path)  # type: ignore[call-arg]
+    except Exception:
+        return None
+
+
+def _wrap_chain(parts: list):
+    """包成 context.send_message 可用的结果对象。"""
+    cls = _result_cls()
+    if cls is not None:
+        try:
+            return cls(chain=parts)
+        except Exception:
+            pass
+    return parts
+
+
 async def send_result(
     *,
     context,
@@ -98,7 +186,10 @@ async def send_result(
     simulate: bool = False,
 ):
     """发送开奖消息。返回 (used_at: bool, used_card: bool)。"""
-    from astrbot.core.message.components import Plain, Image
+    from astrbot.core.message.components import Plain as _CorePlain
+
+    mc = _components_module()
+    Plain = getattr(mc, "Plain", _CorePlain)
 
     tier_lines = []
     for t in tier_results:
@@ -108,45 +199,63 @@ async def send_result(
             line += f"（缺 {t.shortage} 名）"
         tier_lines.append(line)
 
-    winners_text = "、".join(f"@{n}" for _, n in winners_flat)
+    # 模拟时始终展示 @ 效果（若平台支持），真实时跟随群配置
+    at_enabled = settings.at_winners if not simulate else True
+    want_at = bool(at_enabled) and bool(winners_flat)
+    do_real_at = want_at and platform_supports_at(context, umo)
+
+    # <winners> 占位符：真实@时用纯名字，否则用 @名字 文本降级（避免假 @ 与真 @ 并存）
+    if do_real_at:
+        winners_display = "、".join(n for _, n in winners_flat)
+    else:
+        winners_display = "、".join(f"@{n}" for _, n in winners_flat)
     body = render_template(
         settings.template,
-        winners_text,
+        winners_display,
         len(winners_flat),
         group_name or group_id_of(umo),
         contact,
     )
     text = build_text(tier_lines, body, notes, simulate=simulate)
 
-    # 模拟时始终展示 @ 效果（若平台支持），真实时跟随群配置
-    at_enabled = settings.at_winners if not simulate else True
-    want_at = bool(at_enabled) and bool(winners_flat)
-    do_at = want_at and can_at(umo)
+    at_parts = build_at_parts(winners_flat, mc) if do_real_at else []
+    mention_text = "🧪 模拟开奖：🎉 恭喜中奖！" if simulate else "🎉 恭喜中奖！"
 
-    chain: list = []
+    # ---- 卡片开启：卡片前先单独发一条真实 @ 提示（@ 独立于卡片之外），
+    #      然后只发卡片图片（不再返回文字版中奖结果） ----
     if card_image_path:
-        try:
-            chain.append(Image.fromFileSystem(card_image_path))
-        except Exception:
+        img = _image_component(card_image_path, mc)
+        # 1) 真实 @ 提示（独立消息，确保能 @ 到人）
+        if do_real_at and at_parts:
             try:
-                chain.append(Image(file=card_image_path))  # type: ignore[call-arg]
+                await context.send_message(
+                    umo, _wrap_chain(list(at_parts) + [Plain(mention_text)])
+                )
             except Exception:
-                chain = []
-    chain.append(Plain(text))
-    if do_at:
-        for uid, _ in winners_flat:
-            at = _at_component(uid)
-            if at is not None:
-                chain.append(at)
+                pass
+        # 2) 发卡片
+        if img is not None:
+            try:
+                await context.send_message(umo, _wrap_chain([img]))
+                return (bool(at_parts), True)
+            except Exception:
+                pass
+        # 3) 卡片失败：纯文本兜底（真实@已单独发过，不再重复）
+        try:
+            await context.send_message(umo, _wrap_chain([Plain(text)]))
+            return (bool(at_parts), False)
+        except Exception:
+            return (False, False)
 
+    # ---- 无卡片：真实@（文首）+ 文字版 ----
+    parts = (list(at_parts) + [Plain(text)]) if at_parts else [Plain(text)]
     try:
-        await context.send_message(umo, chain)
-        return (do_at, bool(card_image_path))
+        await context.send_message(umo, _wrap_chain(parts))
+        return (do_real_at, False)
     except Exception:
-        # 整体发送失败：去掉 @ 与图片，纯文本兜底
-        fallback = [Plain(text)]
-        if want_at and do_at:
-            # @ 失败时把昵称写进文本已包含 @name；再补发提示不必要
-            pass
-        await context.send_message(umo, fallback)
+        pass
+    try:
+        await context.send_message(umo, _wrap_chain([Plain(text)]))
+        return (False, False)
+    except Exception:
         return (False, False)

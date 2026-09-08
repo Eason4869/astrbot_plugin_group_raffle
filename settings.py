@@ -32,6 +32,7 @@ DEFAULTS: dict[str, Any] = {
     "mode": None,              # None=跟随全局 default_mode
     "prizes": None,            # None=默认单等奖：[{"name":"幸运奖","count":1}]
     "cooldown_days": 7,
+    "cooldown_cross_group": False,   # True=与所有群共享防连中冷却（跨群连续中奖保护）
     "exclude_admins": False,
     "exclude_recent": True,
     "at_winners": None,        # None=跟随全局 at_enabled
@@ -147,6 +148,7 @@ class GroupSettings:
         self.cooldown_days = int(merged["cooldown_days"] or 0)
         self.exclude_admins = bool(merged["exclude_admins"])
         self.exclude_recent = bool(merged["exclude_recent"])
+        self.cooldown_cross_group = bool(merged["cooldown_cross_group"])
         self.at_winners = (
             merged["at_winners"] if merged["at_winners"] is not None
             else self._store.global_at_enabled
@@ -212,6 +214,7 @@ class GroupSettings:
             f"参与模式：{MODE_LABELS.get(self.mode, self.mode)}\n"
             f"中奖等次：{prize_txt}\n"
             f"防连中冷却：{self.cooldown_days} 天"
+            f"{'（跨群共享）' if self.cooldown_cross_group else ''}"
             f"{'（排除近期中奖者）' if self.exclude_recent else ''}\n"
             f"排除管理员：{'是' if self.exclude_admins else '否'}\n"
             f"@中奖者：{'是' if self.at_winners else '否'}\n"
@@ -231,7 +234,7 @@ class SettingsStore:
         self.global_card_enabled = bool(global_config.get("card_enabled", False))
         self.global_template = global_config.get(
             "default_template",
-            "🎉 恭喜 <winners> 中奖！<contact>",
+            "🎉 恭喜 <winners> 中奖！请尽快联系群主/管理员领取奖品。",
         )
 
     def get(self, umo: str) -> GroupSettings:

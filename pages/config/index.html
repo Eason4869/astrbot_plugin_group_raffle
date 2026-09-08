@@ -72,20 +72,29 @@
   .badge.off { background:var(--line); color:var(--muted); }
   .badge.prize { background:var(--brand-l); color:var(--brand-d); margin:0; }
   .row { display:flex; align-items:center; gap:12px; margin-bottom:13px; flex-wrap:wrap; }
-  .row label { width:130px; flex-shrink:0; color:var(--muted); }
-  .row .ctrl { flex:1; min-width:200px; }
+  .row label { width:130px; flex-shrink:0; color:var(--muted); line-height:28px; }
+  .row .ctrl { flex:1; min-width:200px; display:flex; align-items:center; }
+  /* 勾选类控件的容器：只占内容宽度 */
+  .row .ctrl.chk-ctrl { flex:0 0 auto; min-width:0; display:inline-flex; align-items:center; }
+
+  /* 勾选控件（打钩，紧凑且不会被拉伸变长） */
+  .grs-chk { display:inline-flex; align-items:center; gap:7px; cursor:pointer;
+    user-select:none; flex:0 0 auto; padding:3px 0; }
+  .grs-chk input { position:absolute; opacity:0; width:0; height:0; }
+  .grs-box { width:18px; height:18px; flex:0 0 auto; box-sizing:border-box;
+    border:2px solid #9aa4b1; border-radius:5px; background:var(--card, #fff);
+    position:relative; transition:background .15s, border-color .15s; }
+  .grs-chk input:checked + .grs-box { background:#2f9e4c; border-color:#2f9e4c; }
+  .grs-chk input:checked + .grs-box::after { content:""; position:absolute; left:4px; top:0;
+    width:5px; height:9px; border:solid #fff; border-width:0 2px 2px 0;
+    transform:rotate(45deg); }
+  .grs-txt { font-size:13px; color:var(--muted); line-height:18px; white-space:nowrap; }
+  .grs-chk input:checked ~ .grs-txt { color:#2f9e4c; font-weight:700; }
   input[type=text],input[type=number],select,textarea {
     width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:9px;
     background:var(--bg); color:var(--text); font-size:14px; font-family:inherit;
   }
   textarea { min-height:56px; resize:vertical; }
-  .switch { position:relative; width:46px; height:26px; flex-shrink:0; }
-  .switch input { display:none; }
-  .switch .slider { position:absolute; inset:0; background:var(--muted); border-radius:999px; cursor:pointer; transition:.2s; }
-  .switch .slider::after { content:""; position:absolute; width:20px; height:20px; left:3px; top:3px;
-    background:#fff; border-radius:50%; transition:.2s; }
-  .switch input:checked + .slider { background:var(--brand); }
-  .switch input:checked + .slider::after { transform:translateX(20px); }
   .btns { display:flex; gap:10px; margin-top:18px; flex-wrap:wrap; }
   button { padding:9px 20px; border:none; border-radius:9px; cursor:pointer; font-size:14px;
     font-weight:600; font-family:inherit; transition:.15s; }
@@ -104,10 +113,16 @@
     background:var(--text); color:var(--bg); padding:11px 24px; border-radius:999px; font-size:13px;
     opacity:0; transition:.25s; pointer-events:none; z-index:99; }
   .toast.show { opacity:.95; }
+  .top-meta { margin-left:auto; display:flex; align-items:center; gap:10px; }
+  .mode { font-size:11px; background:rgba(255,255,255,.22); padding:4px 12px; border-radius:999px; letter-spacing:.3px; }
+  .view.active { display:block; animation: fade .18s ease; }
   .filters { display:flex; gap:10px; margin-bottom:6px; align-items:center; flex-wrap:wrap; }
   .filters input { width:200px; }
   .win-name { font-weight:700; color:var(--brand-d); }
 </style>
+<!-- 显式提前引入 bridge SDK：保证内联脚本同步执行时 window.AstrBotPluginPage 已就绪。
+     AstrBot 会把这个固定路径改写为带鉴权的真实 SDK 地址；未改写也不影响独立打开。 -->
+<script src="/api/plugin/page/bridge-sdk.js"></script>
 </head>
 <body>
 <div class="topbar">
@@ -115,6 +130,9 @@
   <div>
     <h1>🎰 群抽奖助手 · 管理面板</h1>
     <p>总览 · 中奖记录 · 全局配置 · 分群配置（设置按群独立保存，即时生效）</p>
+  </div>
+  <div class="top-meta">
+    <span class="mode">…</span>
   </div>
 </div>
 <div class="wrap">
@@ -171,212 +189,388 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const P = "/api/plug/astrbot_plugin_group_raffle";
+/* 群抽奖助手 · 管理面板
+ * 数据层同时兼容两种加载方式：
+ *   1) 仪表盘嵌入面板：使用 window.AstrBotPluginPage 桥接（父页面带鉴权），优先；
+ *   2) 同源独立打开 / 直接访问本页：回退为同源 fetch 直连 /api/plug/...，
+ *      自动携带仪表盘登录 token（localStorage 或同源 cookie），无需手动配置。
+ */
+const PLUGIN = "astrbot_plugin_group_raffle";
+const ORIGIN = window.location.origin;
+const OPAGUE_ORIGIN = !ORIGIN || ORIGIN === "null";   // 无 allow-same-origin 的沙箱 iframe
+const LEGACY_API = (OPAGUE_ORIGIN ? "" : ORIGIN) + "/api/plug/" + PLUGIN;
+// 运行时惰性获取 bridge：不能在解析期把 window.AstrBotPluginPage 存成常量——
+// 内联脚本可能先于 SDK 执行，那时它还是 undefined，会被误判为「独立模式」。
+function getBridge() {
+  try {
+    const b = window.AstrBotPluginPage;
+    if (b && typeof b.apiGet === "function" && typeof b.apiPost === "function") return b;
+  } catch (e) { /* 受限沙箱访问 window 失败，按无 bridge 处理 */ }
+  return null;
+}
+
+// 读取仪表盘登录态：SPA 将 JWT 存在 localStorage("token")，也尝试从 cookie 读取。
+function dashboardToken() {
+  try {
+    const t = localStorage.getItem("token");
+    if (t) return t;
+  } catch (e) { /* 沙箱下 localStorage 不可用则忽略 */ }
+  try {
+    const m = document.cookie.match(/(?:^|;\s*)(?:DASHBOARD_JWT|token)=([^;]*)/i);
+    if (m && m[1]) return decodeURIComponent(m[1]);
+  } catch (e) { /* 忽略 */ }
+  return "";
+}
+
+// 归一化：桥接可能直接把 data 负载返回，这里统一成 {status,message,data} 信封。
+function norm(r) {
+  if (r && typeof r === "object" && typeof r.status === "string" && Object.prototype.hasOwnProperty.call(r, "data")) {
+    return r;                                        // 完整信封原样
+  }
+  return { status: "ok", message: "", data: r };     // 负载包一层标准信封
+}
+
+const callSub = sub => String(sub || "").replace(/^\/+/, "").replace(/\/+$/, "");
+function buildUrl(sub, query) {
+  const p = callSub(sub).split("/").map(encodeURIComponent).join("/");
+  const qs = query ? "?" + new URLSearchParams(query).toString() : "";
+  return LEGACY_API + "/" + p + qs;
+}
+
+// 通用直连请求：open 等 → token 优先；失败 / 401 时回退 cookie 再试一次。
+async function request(sub, query, method, body) {
+  if (OPAGUE_ORIGIN) {
+    return { status: "error", message: "页面处于受限的沙箱环境，请改从 AstrBot 面板内打开「👑 管理面板」使用", data: null };
+  }
+  let lastErr = null;
+  for (const withToken of [true, false]) {
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (withToken) {
+        const t = dashboardToken();
+        if (t) headers.Authorization = "Bearer " + t;
+      }
+      const resp = await fetch(buildUrl(sub, query), {
+        method,
+        credentials: "include",
+        headers,
+        body: method === "GET" || body === undefined ? undefined : JSON.stringify(body),
+      });
+      const text = await resp.text();
+      let env = null;
+      try { env = text ? JSON.parse(text) : null; } catch (e) { env = null; }
+      if (resp.status === 401 || resp.status === 403) {
+        lastErr = { status: "error", message: "登录态校验失败（HTTP " + resp.status + "），请确认已登录 AstrBot 面板", data: null };
+        continue;                                     // 可能带错 token → 换无 token / cookie
+      }
+      if (env) return env;
+      throw Object.assign(new Error("接口响应异常（HTTP " + resp.status + "）"), { code: resp.status });
+    } catch (e) {
+      lastErr = { status: "error", message: String((e && e.message) || e) || "网络错误", data: null };
+      if (!withToken) break;                    // 无 token 那轮也失败 → 结束
+    }
+  }
+  return lastErr;
+}
+
+async function apiGet(sub, params) {
+  const bridge = getBridge();
+  try {
+    if (bridge) return norm(await bridge.apiGet(callSub(sub), params || {}));
+    const env = await request(sub, params, "GET");
+    return env.status ? env : { status: "ok", message: "", data: env };
+  } catch (e) {
+    return { status: "error", message: String((e && e.message) || e), data: null };
+  }
+}
+
+async function apiPost(sub, body) {
+  const bridge = getBridge();
+  try {
+    if (bridge) return norm(await bridge.apiPost(callSub(sub), body || {}));
+    const env = await request(sub, null, "POST", body || {});
+    return env.status ? env : { status: "ok", message: "", data: env };
+  } catch (e) {
+    return { status: "error", message: String((e && e.message) || e), data: null };
+  }
+}
+
 let groups = [], cur = null, curUmo = null;
 
-function toast(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("show");
-  setTimeout(()=>t.classList.remove("show"),2200);}
-const apiGet=(e,p)=>window.AstrBotPluginPage.apiGet(e,p);
-const apiPost=(e,b)=>window.AstrBotPluginPage.apiPost(e,b);
+function toast(m) {
+  const t = document.getElementById("toast");
+  t.textContent = m;
+  t.classList.add("show");
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove("show"), 2400);
+}
 
-document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
-  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
-  document.querySelectorAll(".view").forEach(x=>x.classList.remove("active"));
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+  document.querySelectorAll(".view").forEach(x => x.classList.remove("active"));
   t.classList.add("active");
-  document.getElementById("view-"+t.dataset.view).classList.add("active");
-  if(t.dataset.view==="overview") loadOverview();
-  if(t.dataset.view==="records") loadRecords();
-  if(t.dataset.view==="global") loadGlobal();
-  if(t.dataset.view==="groups") loadGroups();
+  document.getElementById("view-" + t.dataset.view).classList.add("active");
+  if (t.dataset.view === "overview") loadOverview();
+  if (t.dataset.view === "records") loadRecords();
+  if (t.dataset.view === "global") loadGlobal();
+  if (t.dataset.view === "groups") loadGroups();
 });
 
-const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const sw=(id,v)=>`<label class="switch"><input type="checkbox" id="${id}" ${v?"checked":""}><span class="slider"></span></label>`;
-const val=id=>document.getElementById(id).checked;
-const sval=id=>document.getElementById(id).value;
-const segVal=id=>document.querySelector("#"+id+" button.sel").dataset.v;
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const amp = s => String(s == null ? "" : s).replace(/["\\]/g, c => ({"\\": "\\\\", '"': "\\\""}[c]));
+const sw = (id, v) => `<label class="grs-chk"><input type="checkbox" id="${id}" ${v ? "checked" : ""}><span class="grs-box"></span><span class="grs-txt">${v ? "已开启" : "已关闭"}</span></label>`;
+document.addEventListener("change", e => {
+  const t = e && e.target;
+  if (t && t.matches && t.matches(".grs-chk input")) {
+    const l = t.closest(".grs-chk") && t.closest(".grs-chk").querySelector(".grs-txt");
+    if (l) { l.textContent = t.checked ? "已开启" : "已关闭"; l.style.color = t.checked ? "" : ""; }
+  }
+});
+const val = id => document.getElementById(id).checked;
+const sval = id => document.getElementById(id).value;
+const segVal = id => document.querySelector("#" + id + " button.sel").dataset.v;
 
-function winnersTable(rows){
-  if(!rows.length) return `<div class="empty">暂无中奖记录</div>`;
-  return `<table><thead><tr><th>时间</th><th>群</th><th>中奖者</th><th>等次</th></tr></thead><tbody>`+
-    rows.map(r=>`<tr><td>${r.time_str}</td><td>${r.group_id}</td>
-      <td class="win-name">${esc(r.name||r.uid)}</td><td><span class="badge prize">${esc(r.prize)}</span></td></tr>`)
-    .join("")+`</tbody></table>`;
+const FAIL = e => `<div class="empty">😵 加载失败：${esc(e)}</div>`;
+
+function winnersTable(rows) {
+  if (!rows || !rows.length) return `<div class="empty">暂无中奖记录</div>`;
+  return `<table><thead><tr><th>时间</th><th>群</th><th>中奖者</th><th>等次</th></tr></thead><tbody>` +
+    rows.map(r => `<tr><td>${esc(r.time_str)}</td><td>${esc(r.group_id)}</td>
+      <td class="win-name">${esc(r.name || r.uid)}</td><td><span class="badge prize">${esc(r.prize)}</span></td></tr>`)
+      .join("") + `</tbody></table>`;
 }
 
-async function loadOverview(){
-  try{
-    const r=await apiGet(`${P}/overview`);
-    const s=(r&&r.data&&r.data.stats)||{};
-    const cards=[["🎯","启用群",s.enabled_groups],["📅","定时群",s.scheduled_groups],
-      ["👥","观测成员",s.members],["🎲","开奖次数",s.draws],["🏆","中奖人次",s.winners],["💬","总群数",s.groups]];
-    document.getElementById("stat-cards").innerHTML=cards.map(([ic,l,n])=>
-      `<div class="stat"><div class="ic">${ic}</div><div class="n">${n==null?0:n}</div><div class="l">${l}</div></div>`).join("");
-    document.getElementById("overview-recent").innerHTML=winnersTable((r&&r.data&&r.data.recent)||[]);
-  }catch(e){document.getElementById("overview-recent").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+async function loadOverview() {
+  try {
+    const r = await apiGet("overview");
+    if (r.status !== "ok") throw new Error(r.message || "数据获取失败");
+    const s = (r.data && r.data.stats) || {};
+    const cards = [
+      ["🎯", "启用群", s.enabled_groups], ["📅", "定时群", s.scheduled_groups],
+      ["👥", "观测成员", s.members], ["🎲", "开奖次数", s.draws],
+      ["🏆", "中奖人次", s.winners], ["💬", "总群数", s.groups],
+    ];
+    document.getElementById("stat-cards").innerHTML = cards.map(([ic, l, n]) =>
+      `<div class="stat"><div class="ic">${ic}</div><div class="n">${n == null ? 0 : n}</div><div class="l">${l}</div></div>`).join("");
+    document.getElementById("overview-recent").innerHTML = winnersTable((r.data && r.data.recent) || []);
+  } catch (e) {
+    document.getElementById("overview-recent").innerHTML = FAIL(e && e.message || e);
+  }
 }
 
-async function loadRecords(){
-  const gid=sval("rec-group").trim();
-  try{
-    const r=await apiGet(`${P}/winners`,gid?{group_id:gid,limit:300}:{limit:300});
-    document.getElementById("records").innerHTML=winnersTable((r&&r.data&&r.data.winners)||[]);
-  }catch(e){document.getElementById("records").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+async function loadRecords() {
+  const gid = sval("rec-group").trim();
+  try {
+    const r = await apiGet("winners", gid ? { group_id: gid, limit: 300 } : { limit: 300 });
+    if (r.status !== "ok") throw new Error(r.message || "数据获取失败");
+    document.getElementById("records").innerHTML = winnersTable((r.data && r.data.winners) || []);
+  } catch (e) {
+    document.getElementById("records").innerHTML = FAIL(e && e.message || e);
+  }
 }
-document.getElementById("rec-reload").onclick=loadRecords;
+document.getElementById("rec-reload").onclick = loadRecords;
+document.getElementById("rec-group").addEventListener("keydown", e => { if (e.key === "Enter") loadRecords(); });
 
-async function loadGlobal(){
-  try{
-    const r=await apiGet(`${P}/global`);
-    const c=(r&&r.data)||{};
-    document.getElementById("global-form").innerHTML=`
+async function loadGlobal() {
+  try {
+    const r = await apiGet("global");
+    if (r.status !== "ok") throw new Error(r.message || "数据获取失败");
+    const c = r.data || {};
+    document.getElementById("global-form").innerHTML = `
       <div class="row"><label>群启用模式</label><div class="ctrl"><div class="seg" id="g-mode">
-        ${[["blacklist","黑名单(默认全开)"],["whitelist","白名单(仅列出)"]].map(([k,v])=>
-          `<button data-v="${k}" class="${c.enabled_groups_mode===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
-      <div class="row"><label>群白名单</label><div class="ctrl"><input type="text" id="g-wl" value="${esc((c.group_whitelist||[]).join(","))}">
+        ${[["blacklist", "黑名单(默认全开)"], ["whitelist", "白名单(仅列出)"]].map(([k, v]) =>
+            `<button data-v="${k}" class="${c.enabled_groups_mode === k ? "sel" : ""}">${v}</button>`).join("")}</div></div></div>
+      <div class="row"><label>群白名单</label><div class="ctrl"><input type="text" id="g-wl" value="${esc((c.group_whitelist || []).join(","))}">
         <div class="hint">群号，英文逗号分隔</div></div></div>
-      <div class="row"><label>群黑名单</label><div class="ctrl"><input type="text" id="g-bl" value="${esc((c.group_blacklist||[]).join(",""))}">
+      <div class="row"><label>群黑名单</label><div class="ctrl"><input type="text" id="g-bl" value="${esc((c.group_blacklist || []).join(","))}">
         <div class="hint">群号，英文逗号分隔</div></div></div>
-      <div class="row"><label>额外管理员</label><div class="ctrl"><input type="text" id="g-admins" value="${esc((c.admins||[]).join(","))}">
+      <div class="row"><label>额外管理员</label><div class="ctrl"><input type="text" id="g-admins" value="${esc((c.admins || []).join(","))}">
         <div class="hint">用户号，逗号分隔（群主/群管已自动有权限）</div></div></div>
-      <div class="row"><label>联系方式</label><div class="ctrl"><input type="text" id="g-contact" value="${esc(c.contact||"")}">
-        <div class="hint">模板中 &lt;contact&gt; 替换内容</div></div></div>
-      <div class="row"><label>默认中奖模板</label><div class="ctrl"><textarea id="g-tpl">${esc(c.default_template||"")}</textarea></div></div>
-      <div class="row"><label>默认卡片</label><div class="ctrl" style="flex:0">${sw("g-card",c.card_enabled)}</div></div>
-      <div class="row"><label>默认@中奖者</label><div class="ctrl" style="flex:0">${sw("g-at",c.at_enabled)}</div></div>
+      <div class="row"><label>联系方式</label><div class="ctrl"><input type="text" id="g-contact" value="${esc(c.contact || "")}">
+        <div class="hint">追加在模板末尾的联系方式（模板含 &lt;contact&gt; 时替换）</div></div></div>
+      <div class="row"><label>默认中奖模板</label><div class="ctrl"><textarea id="g-tpl">${esc(c.default_template || "")}</textarea>
+        <div class="hint">占位符 &lt;winners&gt; &lt;count&gt; &lt;group&gt; &lt;time&gt; &lt;contact&gt;</div></div></div>
+      <div class="row"><label>默认卡片</label><div class="ctrl chk-ctrl">${sw("g-card", c.card_enabled)}</div></div>
+      <div class="row"><label>默认@中奖者</label><div class="ctrl chk-ctrl">${sw("g-at", c.at_enabled)}</div></div>
       <div class="row"><label>新群默认模式</label><div class="ctrl"><div class="seg" id="g-defmode">
-        ${[["equal","全员等权"],["activity","活跃度加权"],["signup","报名参与"]].map(([k,v])=>
-          `<button data-v="${k}" class="${c.default_mode===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
-      <div class="row"><label>每日消息上限</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-cap" value="${c.daily_msg_cap??30}"></div></div>
-      <div class="row"><label>最小间隔(秒)</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-gap" value="${c.msg_min_gap_seconds??5}"></div></div>
-      <div class="row"><label>数据保留(天)</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-ret" value="${c.data_retention_days??60}"></div></div>
+        ${[["equal", "全员等权"], ["activity", "活跃度加权"], ["signup", "报名参与"]].map(([k, v]) =>
+            `<button data-v="${k}" class="${c.default_mode === k ? "sel" : ""}">${v}</button>`).join("")}</div></div></div>
+      <div class="row"><label>每日消息上限</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-cap" value="${c.daily_msg_cap ?? 30}"></div></div>
+      <div class="row"><label>最小间隔(秒)</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-gap" value="${c.msg_min_gap_seconds ?? 5}"></div></div>
+      <div class="row"><label>数据保留(天)</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-ret" value="${c.data_retention_days ?? 60}"></div></div>
       <div class="btns"><button class="btn-primary" id="g-save">💾 保存全局配置</button></div>`;
-    document.querySelectorAll("#g-mode button,#g-defmode button").forEach(b=>b.onclick=()=>{
-      const parent=b.parentElement;parent.querySelectorAll("button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");});
-    document.getElementById("g-save").onclick=saveGlobal;
-  }catch(e){document.getElementById("global-form").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+    document.querySelectorAll("#g-mode button,#g-defmode button").forEach(b => b.onclick = () => {
+      const parent = b.parentElement;
+      parent.querySelectorAll("button").forEach(x => x.classList.remove("sel"));
+      b.classList.add("sel");
+    });
+    document.getElementById("g-save").onclick = saveGlobal;
+  } catch (e) {
+    document.getElementById("global-form").innerHTML = FAIL(e && e.message || e);
+  }
 }
 
-function listCsv(s){return s.split(/[,，]/).map(x=>x.trim()).filter(Boolean);}
-async function saveGlobal(){
-  const patch={
-    enabled_groups_mode:segVal("g-mode"),
-    group_whitelist:listCsv(sval("g-wl")),
-    group_blacklist:listCsv(sval("g-bl")),
-    admins:listCsv(sval("g-admins")),
-    contact:sval("g-contact"),
-    default_template:sval("g-tpl"),
-    card_enabled:val("g-card"),
-    at_enabled:val("g-at"),
-    default_mode:segVal("g-defmode"),
-    daily_msg_cap:parseInt(sval("g-cap"),10)||30,
-    msg_min_gap_seconds:parseInt(sval("g-gap"),10)||5,
-    data_retention_days:parseInt(sval("g-ret"),10)||60,
+function listCsv(s) { return s.split(/[,，]/).map(x => x.trim()).filter(Boolean); }
+
+async function saveGlobal() {
+  const patch = {
+    enabled_groups_mode: segVal("g-mode"),
+    group_whitelist: listCsv(sval("g-wl")),
+    group_blacklist: listCsv(sval("g-bl")),
+    admins: listCsv(sval("g-admins")),
+    contact: sval("g-contact"),
+    default_template: sval("g-tpl"),
+    card_enabled: val("g-card"),
+    at_enabled: val("g-at"),
+    default_mode: segVal("g-defmode"),
+    daily_msg_cap: parseInt(sval("g-cap"), 10) || 30,
+    msg_min_gap_seconds: parseInt(sval("g-gap"), 10) || 5,
+    data_retention_days: parseInt(sval("g-ret"), 10) || 60,
   };
-  try{
-    const r=await apiPost(`${P}/global`,{patch});
-    toast(r&&r.status==="ok"?"✅ 全局配置已保存":"❌ "+((r&&r.message)||"失败"));
-  }catch(e){toast("❌ "+e);}
+  try {
+    const r = await apiPost("global", { patch: patch });
+    toast(r && r.status === "ok" ? "✅ 全局配置已保存" : "❌ " + ((r && r.message) || "失败"));
+  } catch (e) {
+    toast("❌ " + ((e && e.message) || e));
+  }
 }
 
-async function loadGroups(){
-  try{
-    const r=await apiGet(`${P}/groups`);
-    groups=(r&&r.data&&r.data.groups)||[];
-    document.getElementById("groups").innerHTML=groups.length?groups.map(g=>
-      `<div class="gitem ${g.umo===curUmo?"active":""}" data-umo="${esc(g.umo)}">
-        <div class="gid">群 ${esc(g.group_id)}<span class="badge ${g.enabled?"on":"off"}">${g.enabled?"启用":"停用"}</span></div>
+async function loadGroups() {
+  try {
+    const r = await apiGet("groups");
+    if (r.status !== "ok") throw new Error(r.message || "数据获取失败");
+    groups = (r.data && r.data.groups) || [];
+    document.getElementById("groups").innerHTML = groups.length ? groups.map(g =>
+      `<div class="gitem ${g.umo === curUmo ? "active" : ""}" data-umo="${esc(g.umo)}">
+        <div class="gid">群 ${esc(g.umo.split(":")[2] || g.group_id)}<span class="badge ${g.enabled ? "on" : "off"}">${g.enabled ? "启用" : "停用"}</span></div>
         <div class="meta">${g.member_observed} 成员 · ${esc(g.schedule_desc)}</div></div>`).join("")
-      :`<div class="empty">还没有群。机器人入群发言，<br>或管理员发送「抽奖 启用」。</div>`;
-    document.querySelectorAll(".gitem").forEach(it=>it.onclick=()=>selectGroup(it.dataset.umo));
-  }catch(e){document.getElementById("groups").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+      : `<div class="empty">还没有群。机器人入群发言，<br>或管理员发送「抽奖 启用」。</div>`;
+    document.querySelectorAll(".gitem").forEach(it => it.onclick = () => selectGroup(it.dataset.umo));
+  } catch (e) {
+    document.getElementById("groups").innerHTML = FAIL(e && e.message || e);
+  }
 }
 
-async function selectGroup(umo){
-  curUmo=umo; loadGroups();
-  const r=await apiGet(`${P}/config/${encodeURIComponent(umo)}`);
-  cur=r&&r.data; if(!cur){toast("配置加载失败");return;}
+async function selectGroup(umo) {
+  curUmo = umo;
+  document.querySelectorAll(".gitem").forEach(it => it.classList.toggle("active", it.dataset.umo === umo));
+  const r = await apiGet("config/" + umo);   // 桥接/直连分别负责各自 URL 转义
+  if (r.status !== "ok" || !r.data) { toast("配置加载失败：" + (r.message || "未知错误")); return; }
+  cur = r.data;
   renderDetail();
 }
 
-function renderDetail(){
-  const c=cur;
-  document.getElementById("detail-title").textContent=`群 ${c.group_id} 配置`;
-  const modes=[["equal","全员等权"],["activity","活跃度加权"],["signup","报名参与"]];
-  const st=[["none","关闭"],["daily","每日"],["weekly","每周"],["biweekly","每两周"],["monthly","每月"],["custom","cron"]];
-  document.getElementById("detail").innerHTML=`
-    <div class="row"><label>启用本群抽奖</label><div class="ctrl" style="flex:0">${sw("f-enabled",c.enabled)}</div></div>
+function renderDetail() {
+  const c = cur;
+  const groupId = c.group_id || (c.umo || "").split(":")[2] || "";
+  document.getElementById("detail-title").textContent = `群 ${groupId} 配置`;
+  const modes = [["equal", "全部等权"], ["activity", "活跃度加权"], ["signup", "报名参与"]];
+  const st = [["none", "关闭"], ["daily", "每日"], ["weekly", "每周"], ["biweekly", "每两周"], ["monthly", "每月"], ["custom", "cron"]];
+  document.getElementById("detail").innerHTML = `
+    <div class="row"><label>启用本群抽奖</label><div class="ctrl chk-ctrl">${sw("f-enabled", c.enabled)}</div></div>
     <div class="section-title">参与与中奖</div>
     <div class="row"><label>参与模式</label><div class="ctrl"><div class="seg" id="f-mode">
-      ${modes.map(([k,v])=>`<button data-v="${k}" class="${c.mode===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
+      ${modes.map(([k, v]) => `<button data-v="${k}" class="${c.mode === k ? "sel" : ""}">${v}</button>`).join("")}</div></div></div>
     <div class="row"><label>中奖等次名额</label><div class="ctrl"><input type="text" id="f-prizes"
-      value="${esc(c.prizes.map(p=>p.name+":"+p.count).join(","))}"><div class="hint">一等奖:1,二等奖:2</div></div></div>
+      value="${esc(c.prizes.map(p => p.name + ":" + p.count).join(","))}"><div class="hint">一等奖:1,二等奖:2</div></div></div>
     <div class="row"><label>防连中冷却(天)</label><div class="ctrl" style="flex:0 0 160px">
       <input type="number" id="f-cooldown" value="${c.cooldown_days}" min="0"></div></div>
-    <div class="row"><label>排除管理员</label><div class="ctrl" style="flex:0">${sw("f-exadmins",c.exclude_admins)}</div></div>
+    <div class="row"><label>跨群冷却</label><div class="ctrl chk-ctrl">${sw("f-cgcool", c.cooldown_cross_group)}</div>
+      <div class="hint" style="flex:0 0 100%;padding-left:142px">开启后与所有群共享冷却，防止跨群连续中奖（默认关闭）</div></div>
+    <div class="row"><label>排除管理员</label><div class="ctrl chk-ctrl">${sw("f-exadmins", c.exclude_admins)}</div></div>
     <div class="section-title">活跃度加权</div>
     <div class="row"><label>统计窗口(天)</label><div class="ctrl" style="flex:0 0 160px"><input type="number" id="f-window" value="${c.activity_window_days}"></div></div>
     <div class="row"><label>最低发言条数</label><div class="ctrl" style="flex:0 0 160px"><input type="number" id="f-mincount" value="${c.activity_min_count}"></div></div>
     <div class="section-title">通知与卡片</div>
-    <div class="row"><label>@中奖者</label><div class="ctrl" style="flex:0">${sw("f-at",c.at_winners)}</div></div>
-    <div class="row"><label>开奖卡片</label><div class="ctrl" style="flex:0">${sw("f-card",c.card_enabled)}</div></div>
-    <div class="row"><label>中奖模板</label><div class="ctrl"><textarea id="f-template">${esc(c.template||"")}</textarea>
+    <div class="row"><label>@中奖者</label><div class="ctrl chk-ctrl">${sw("f-at", c.at_winners)}</div></div>
+    <div class="row"><label>开奖卡片</label><div class="ctrl chk-ctrl">${sw("f-card", c.card_enabled)}</div></div>
+    <div class="row"><label>中奖模板</label><div class="ctrl"><textarea id="f-template">${esc(c.template || "")}</textarea>
       <div class="hint">占位符 &lt;winners&gt; &lt;count&gt; &lt;group&gt; &lt;time&gt; &lt;contact&gt;</div></div></div>
     <div class="section-title">定时开奖</div>
     <div class="row"><label>定时类型</label><div class="ctrl"><div class="seg" id="f-st">
-      ${st.map(([k,v])=>`<button data-v="${k}" class="${c.schedule.type===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
-    <div class="row"><label>时间(HH:MM)</label><div class="ctrl" style="flex:0 0 160px"><input type="text" id="f-time" value="${esc(c.schedule.time||"20:00")}"></div></div>
+      ${st.map(([k, v]) => `<button data-v="${k}" class="${c.schedule.type === k ? "sel" : ""}">${v}</button>`).join("")}</div></div></div>
+    <div class="row"><label>时间(HH:MM)</label><div class="ctrl" style="flex:0 0 160px"><input type="text" id="f-time" value="${esc(c.schedule.time || "20:00")}"></div></div>
     <div class="row" id="row-wd" style="display:none"><label>星期</label><div class="ctrl" style="flex:0 0 160px">
-      <select id="f-wd">${["周一","周二","周三","周四","周五","周六","周日"].map((w,i)=>
-        `<option value="${i}" ${c.schedule.weekday===i?"selected":""}>${w}</option>`).join("")}</select></div></div>
+      <select id="f-wd">${["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map((w, i) =>
+        `<option value="${i}" ${c.schedule.weekday === i ? "selected" : ""}>${w}</option>`).join("")}</select></div></div>
     <div class="row" id="row-md" style="display:none"><label>每月日期</label><div class="ctrl" style="flex:0 0 160px">
-      <input type="number" id="f-md" value="${c.schedule.monthday||1}" min="1" max="28"></div></div>
+      <input type="number" id="f-md" value="${c.schedule.monthday || 1}" min="1" max="28"></div></div>
     <div class="row" id="row-cron" style="display:none"><label>cron</label><div class="ctrl">
-      <input type="text" id="f-cron" value="${esc(c.schedule.cron||"")}" placeholder="0 20 * * 5">
+      <input type="text" id="f-cron" value="${esc(c.schedule.cron || "")}" placeholder="0 20 * * 5">
       <div class="hint">5 段：分 时 日 月 周</div></div></div>
-    <div class="next" id="f-next">${(c.next_fires||[]).map(x=>"· "+x).join("<br>")}</div>
+    <div class="next" id="f-next">${(c.next_fires || []).map(x => "· " + x).join("<br>")}</div>
     <div class="btns">
       <button class="btn-primary" id="btn-save">💾 保存</button>
       <button class="btn-ghost" id="btn-refresh">🔄 刷新</button>
-      <button class="btn-ghost" id="btn-draw">🎲 立即开奖</button>
     </div>`;
-  document.querySelectorAll("#f-mode button,#f-st button").forEach(b=>b.onclick=()=>{
-    b.parentElement.querySelectorAll("button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");
-    if(b.parentElement.id==="f-st") syncSched();});
-  const syncSched=()=>{const t=segVal("f-st");
-    document.getElementById("row-wd").style.display=(t==="weekly"||t==="biweekly")?"flex":"none";
-    document.getElementById("row-md").style.display=(t==="monthly")?"flex":"none";
-    document.getElementById("row-cron").style.display=(t==="custom")?"flex":"none";};
+  document.querySelectorAll("#f-mode button,#f-st button").forEach(b => b.onclick = () => {
+    const parent = b.parentElement;
+    parent.querySelectorAll("button").forEach(x => x.classList.remove("sel"));
+    b.classList.add("sel");
+    if (b.parentElement.id === "f-st") syncSched();
+  });
+  const syncSched = () => {
+    const t = segVal("f-st");
+    document.getElementById("row-wd").style.display = (t === "weekly" || t === "biweekly") ? "flex" : "none";
+    document.getElementById("row-md").style.display = (t === "monthly") ? "flex" : "none";
+    document.getElementById("row-cron").style.display = (t === "custom") ? "flex" : "none";
+  };
   syncSched();
-  document.getElementById("btn-save").onclick=save;
-  document.getElementById("btn-refresh").onclick=()=>selectGroup(curUmo);
-  document.getElementById("btn-draw").onclick=doDraw;
+  document.getElementById("btn-save").onclick = saveDetail;
+  document.getElementById("btn-refresh").onclick = () => selectGroup(curUmo);
 }
 
-function readSched(){const t=segVal("f-st");const s={type:t,time:sval("f-time"),weekday:0,monthday:1,cron:""};
-  if(t==="weekly"||t==="biweekly")s.weekday=parseInt(sval("f-wd"),10);
-  if(t==="monthly")s.monthday=parseInt(sval("f-md"),10);
-  if(t==="custom")s.cron=sval("f-cron").trim();return s;}
-
-async function save(){
-  const patch={enabled:val("f-enabled"),mode:segVal("f-mode"),prizes:sval("f-prizes").trim(),
-    cooldown_days:parseInt(sval("f-cooldown"),10)||0,exclude_admins:val("f-exadmins"),
-    activity_window_days:parseInt(sval("f-window"),10)||7,activity_min_count:parseInt(sval("f-mincount"),10)||0,
-    at_winners:val("f-at"),card_enabled:val("f-card"),template:sval("f-template"),schedule:readSched()};
-  try{
-    const r=await apiPost(`${P}/config`,{umo:curUmo,patch});
-    if(r&&r.status==="ok"){toast("✅ 已保存");cur=r.data;renderDetail();loadGroups();}
-    else toast("❌ "+((r&&r.message)||"保存失败"));
-  }catch(e){toast("❌ "+e);}
-}
-async function doDraw(){
-  if(!confirm("确定立即开奖？会真实发送开奖消息并记录中奖。"))return;
-  try{const r=await apiPost(`${P}/draw`,{umo:curUmo});
-    toast(r&&r.status==="ok"?"🎲 开奖指令已执行":"❌ "+((r&&r.message)||"失败"));}
-  catch(e){toast("❌ "+e);}
+function readSched() {
+  const t = segVal("f-st");
+  const s = { type: t, time: sval("f-time"), weekday: 0, monthday: 1, cron: "" };
+  if (t === "weekly" || t === "biweekly") s.weekday = parseInt(sval("f-wd"), 10) || 0;
+  if (t === "monthly") s.monthday = parseInt(sval("f-md"), 10) || 1;
+  if (t === "custom") s.cron = sval("f-cron").trim();
+  return s;
 }
 
-window.AstrBotPluginPage.ready().then(loadOverview);
+async function saveDetail() {
+  const patch = {
+    enabled: val("f-enabled"), mode: segVal("f-mode"), prizes: sval("f-prizes").trim(),
+    cooldown_days: parseInt(sval("f-cooldown"), 10) || 0, cooldown_cross_group: val("f-cgcool"), exclude_admins: val("f-exadmins"),
+    activity_window_days: parseInt(sval("f-window"), 10) || 7, activity_min_count: parseInt(sval("f-mincount"), 10) || 0,
+    at_winners: val("f-at"), card_enabled: val("f-card"), template: sval("f-template"), schedule: readSched(),
+  };
+  let r;
+  try {
+    r = await apiPost("config", { umo: curUmo, patch: patch });
+  } catch (e) {
+    toast("❌ 保存请求失败：" + ((e && e.message) || e));
+    return;
+  }
+  if (r && r.status === "ok") {
+    toast("✅ 已保存");
+    cur = r.data;
+    renderDetail();
+    loadGroups();
+  } else {
+    toast("❌ " + ((r && r.message) || "保存失败"));
+  }
+}
+
+/* ---------- 启动 ----------
+ * 在仪表盘嵌入页等待桥接就绪；若桥接缺失（独立打开）或超时，立即回退直连加载，避免一直「加载中」。 */
+async function bootstrap() {
+  const bridge = getBridge();
+  if (bridge) {
+    try {
+      if (typeof bridge.ready === "function") {
+        await Promise.race([bridge.ready(), new Promise(res => setTimeout(res, 3000))]);
+      }
+    } catch (e) { /* 桥接异常则忽略 */ }
+  }
+  const modeEl = document.querySelector(".topbar .mode");
+  if (modeEl) modeEl.textContent = bridge ? "嵌入模式" : "独立模式";
+  loadOverview();
+  loadGroups();
+}
+
+bootstrap();
 </script>
 </body>
 </html>

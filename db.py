@@ -243,14 +243,20 @@ class Database:
             )
             self.conn.commit()
 
-    def recent_winner_uids(self, umo: str, since_ts: int) -> set:
+    def recent_winner_uids(self, umo: str | None, since_ts: int) -> set:
+        """返回冷却期内中过奖的用户。umo=None 表示跨群（所有群）统计。"""
         if since_ts <= 0:
             return set()
         with _LOCK:
-            rows = self.conn.execute(
-                "SELECT DISTINCT uid FROM winners WHERE umo=? AND ts>=?",
-                (umo, since_ts),
-            ).fetchall()
+            if umo:
+                rows = self.conn.execute(
+                    "SELECT DISTINCT uid FROM winners WHERE umo=? AND ts>=?",
+                    (umo, since_ts),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    "SELECT DISTINCT uid FROM winners WHERE ts>=?", (since_ts,)
+                ).fetchall()
         return {r["uid"] for r in rows}
 
     def add_draw_log(self, umo: str, ts: int, mode: str, trigger: str, result_json: str):
