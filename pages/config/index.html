@@ -475,6 +475,8 @@ function renderDetail() {
       value="${esc(c.prizes.map(p => p.name + ":" + p.count).join(","))}"><div class="hint">一等奖:1,二等奖:2</div></div></div>
     <div class="row"><label>防连中冷却(天)</label><div class="ctrl" style="flex:0 0 160px">
       <input type="number" id="f-cooldown" value="${c.cooldown_days}" min="0"></div></div>
+    <div class="row"><label>跨群冷却</label><div class="ctrl chk-ctrl">${sw("f-cgcool", c.cooldown_cross_group)}</div>
+      <div class="hint" style="flex:0 0 100%;padding-left:142px">开启后与所有群共享冷却，防止跨群连续中奖（默认关闭）</div></div>
     <div class="row"><label>排除管理员</label><div class="ctrl chk-ctrl">${sw("f-exadmins", c.exclude_admins)}</div></div>
     <div class="section-title">活跃度加权</div>
     <div class="row"><label>统计窗口(天)</label><div class="ctrl" style="flex:0 0 160px"><input type="number" id="f-window" value="${c.activity_window_days}"></div></div>
@@ -532,7 +534,7 @@ function readSched() {
 async function saveDetail() {
   const patch = {
     enabled: val("f-enabled"), mode: segVal("f-mode"), prizes: sval("f-prizes").trim(),
-    cooldown_days: parseInt(sval("f-cooldown"), 10) || 0, exclude_admins: val("f-exadmins"),
+    cooldown_days: parseInt(sval("f-cooldown"), 10) || 0, cooldown_cross_group: val("f-cgcool"), exclude_admins: val("f-exadmins"),
     activity_window_days: parseInt(sval("f-window"), 10) || 7, activity_min_count: parseInt(sval("f-mincount"), 10) || 0,
     at_winners: val("f-at"), card_enabled: val("f-card"), template: sval("f-template"), schedule: readSched(),
   };

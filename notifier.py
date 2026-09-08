@@ -144,7 +144,16 @@ async def send_result(
         await context.send_message(umo, MessageChain(chain=chain))
         return (do_at, bool(card_image_path))
     except Exception:
-        # 整体发送失败：去掉 @ 与图片，纯文本兜底
+        # 整体发送失败：先尝试单独发图片（避免混合消息导致 QQ highway 上传失败），
+        # 仍失败则退回纯文本，确保中奖信息一定送达。
+        if card_image_path:
+            try:
+                await context.send_message(
+                    umo, MessageChain(chain=[Image.fromFileSystem(card_image_path)])
+                )
+                return (False, True)
+            except Exception:
+                pass
         fallback = MessageChain(chain=[Plain(text)])
         await context.send_message(umo, fallback)
         return (False, False)

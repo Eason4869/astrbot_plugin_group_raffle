@@ -10,10 +10,17 @@
 import asyncio
 import html
 import os
+import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+
+
+def _uniq_name(base: str) -> str:
+    """每次渲染生成唯一文件名，避免并发覆盖旧文件（覆盖可能使上传读到损坏/截断文件）。"""
+    return f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}_{base}"
 
 
 def _out_dir() -> str:
@@ -144,7 +151,7 @@ def _coerce_to_path(result) -> Optional[str]:
         return s
     # 部分实现返回 bytes / data-url，则落盘
     if isinstance(result, (bytes, bytearray)):
-        p = os.path.join(_out_dir(), "card.png")
+        p = os.path.join(_out_dir(), _uniq_name("card.png"))
         with open(p, "wb") as f:
             f.write(result)
         return p
@@ -241,7 +248,7 @@ def _render_pillow(tier_results, group_name, when_str, mode_label, pool_size,
         y += 14
     center(H - 28, "群抽奖助手 GroupRaffle", f_sub, (176, 138, 94))
 
-    out = os.path.join(_out_dir(), "raffle_card.png")
+    out = os.path.join(_out_dir(), _uniq_name("raffle_card.png"))
     img.save(out)
     return out
 
@@ -308,7 +315,7 @@ def _render_info_pillow(title: str, subtitle: str,
         y += 10
     center_x(H - 28, "群抽奖助手 GroupRaffle", f_sub, (176, 138, 94))
 
-    out = os.path.join(_out_dir(), "info.png")
+    out = os.path.join(_out_dir(), _uniq_name("info.png"))
     img.save(out)
     return out
 
@@ -376,6 +383,6 @@ def _render_help_pillow(rows: list[dict]) -> Optional[str]:
             ty += 20
         y += rh
 
-    out = os.path.join(_out_dir(), "help.png")
+    out = os.path.join(_out_dir(), _uniq_name("help.png"))
     img.save(out)
     return out

@@ -103,6 +103,13 @@ def _install_stubs():
 
     comp.Plain = _Plain
     comp.Image = _Image
+    mer_mod = make_pkg("astrbot.core.message.message_event_result")
+
+    class _MessageChain:
+        def __init__(self, chain=None):
+            self.chain = list(chain) if chain is not None else []
+
+    mer_mod.MessageChain = _MessageChain
     make_pkg("astrbot.core.star")
     sm = make_pkg("astrbot.core.star.star_handler")
     sm.star_handlers_registry = types.SimpleNamespace(
@@ -128,11 +135,18 @@ from activity import ActivityTracker  # noqa: E402
 
 
 class FakeCtx:
+    def __init__(self, fail_send=False):
+        self.sent = []
+        self.fail_send = fail_send
+
     def register_web_api(self, *a, **k):
         pass
 
     async def send_message(self, umo, chain):
-        pass
+        if self.fail_send:
+            raise RuntimeError("highway 921")
+        comps = chain.chain if hasattr(chain, "chain") else chain
+        self.sent.append((umo, list(comps)))
 
 
 class Result:
@@ -207,7 +221,8 @@ async def run_cmd(p, text):
 async def main():
     tmp = tempfile.mkdtemp()
     dbp = os.path.join(tmp, "t.db")
-    p = Plugin(FakeCtx(), {"card_enabled": True, "at_enabled": True}, dbp)
+    ctx = FakeCtx()
+    p = Plugin(ctx, {"card_enabled": True, "at_enabled": True}, dbp)
     umo = "aiocqhttp:1:100"
     for i in range(5):
         p.db.upsert_user(umo, f"u{i}", f"成员{i}")
@@ -215,21 +230,34 @@ async def main():
     gs.set_enabled(True)
 
     ev = await run_cmd(p, "抽奖 状态")
-    print("状态 -> images:", len(ev.image_sent), "plains:", len(ev.plain_sent))
-    assert ev.image_sent, "状态未返回卡片图片"
+    img = any(any("Image" in type(c).__name__ for c in chain) for _, chain in ctx.sent)
+    print("状态 -> ctx.sent:", [type(c).__name__ for _, c in ctx.sent], "plains:", ev.plain_sent)
+    assert img, "状态卡片图片未通过 context 发出"
     assert ev.stopped, "状态未 stop_event，可能被 LLM 接管"
 
+    ctx.sent.clear()
     ev = await run_cmd(p, "抽奖 名单")
-    print("名单 -> images:", len(ev.image_sent), "plains:", len(ev.plain_sent))
-    assert ev.image_sent, "名单未返回卡片图片"
+    img = any(any("Image" in type(c).__name__ for c in chain) for _, chain in ctx.sent)
+    assert img, "名单卡片图片未通过 context 发出"
     assert ev.stopped, "名单未 stop_event，可能被 LLM 接管"
 
     # 停用群后，只读信息命令仍应返回
     gs.set_enabled(False)
+    ctx.sent.clear()
     ev = await run_cmd(p, "抽奖 状态")
-    assert ev.image_sent or ev.plain_sent, "停用后 状态 未返回结果"
+    assert ctx.sent or ev.plain_sent, "停用后 状态 未返回结果"
     assert ev.stopped, "停用后 状态 未 stop_event"
-    print("-> 停用后 状态 仍返回:", bool(ev.image_sent or ev.plain_sent))
+    print("-> 停用后 状态 仍返回:", bool(ctx.sent or ev.plain_sent))
+
+    # 图片发送失败(如 QQ highway 921)时，必须回退纯文本，保证命令有返回
+    ctx2 = FakeCtx(fail_send=True)
+    p2 = Plugin(ctx2, {"card_enabled": True, "at_enabled": True}, dbp)
+    g2 = p2.store.get(umo)
+    g2.set_enabled(True)
+    ev2 = await run_cmd(p2, "抽奖 状态")
+    assert ev2.plain_sent, "图片发送失败时未回退纯文本"
+    assert ev2.stopped
+    print("-> 图片 921 时已回退纯文本:", ev2.plain_sent[0][:20], "...")
 
     print("OK")
 

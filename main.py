@@ -122,7 +122,7 @@ def _fallback_help_text() -> str:
     "astrbot_plugin_group_raffle",
     "Eason4869",
     "群抽奖助手 GroupRaffle：分群配置/定时/活跃度加权/报名/多等次/@/卡片",
-    "0.3.5-beta",
+    "0.3.6-beta",
 )
 class GroupRafflePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -383,22 +383,36 @@ class GroupRafflePlugin(Star):
                 result = await result
             if not result:
                 return
-            # 信息卡片：handler 返回 {"card": {"title","subtitle","sections"}, "fallback": str}
+            # 信息卡片：handler 返回 {"card": {...}, "fallback": str}。
+            # 卡片优先：通过 context 直发图片；若渲染失败或图片发送失败(如 QQ
+            # highway 921)，自动回退纯文本，保证命令一定有返回。
             if isinstance(result, dict) and "card" in result:
                 spec = result["card"]
-                sent = False
+                fallback = result.get("fallback") or ""
+                image_ok = False
                 try:
+                    from astrbot.core.message.components import Image
+                    from astrbot.core.message.message_event_result import MessageChain
+
                     path = await render_info_card(
                         self, spec.get("title", ""), spec.get("subtitle", ""),
                         spec.get("sections", []),
                     )
                     if path:
-                        yield event.image_result(path)
-                        sent = True
+                        try:
+                            await self.context.send_message(
+                                event.unified_msg_origin,
+                                MessageChain(chain=[Image.fromFileSystem(path)]),
+                            )
+                            image_ok = True
+                        except Exception as e:
+                            logger.warning(
+                                f"[GroupRaffle] 信息卡片图片发送失败，回退文本：{e}"
+                            )
                 except Exception as e:
                     logger.warning(f"[GroupRaffle] 信息卡片渲染失败，回退文本：{e}")
-                if not sent:
-                    yield event.plain_result(result.get("fallback") or "")
+                if not image_ok:
+                    yield event.plain_result(fallback)
             else:
                 yield event.plain_result(result)
         except DrawError as e:
@@ -569,7 +583,9 @@ class GroupRafflePlugin(Star):
         umo = gs.umo
         mode_label = MODE_LABELS.get(gs.mode, gs.mode)
         prizes = "、".join(f"{p['name']}×{p['count']}" for p in gs.prizes) or "（未设置）"
-        cool = (f"{gs.cooldown_days} 天（排除近期中奖）"
+        cool = (f"{gs.cooldown_days} 天"
+                + ("（跨群）" if gs.cooldown_cross_group else "")
+                + ("，排除近期中奖" if gs.exclude_recent and gs.cooldown_days > 0 else "")
                 if gs.exclude_recent and gs.cooldown_days > 0 else "关闭")
         sched_desc = gs.describe_schedule() or "未开启定时"
 
@@ -752,12 +768,21 @@ class GroupRafflePlugin(Star):
 
     def _h_cooldown(self, event, args, gs):
         if not args:
-            raise ValueError("用法：抽奖 冷却 7（天，0=关闭防连中）")
-        days = int(args[0])
+            raise ValueError("用法：抽奖 冷却 7（天，0=关闭）｜抽奖 冷却 跨群 开|关")
+        first = args[0]
+        if first in ("跨群", "跨群冷却", "cross"):
+            if len(args) < 2:
+                raise ValueError("用法：抽奖 冷却 跨群 开|关")
+            val = _on_off(args[1])
+            gs.update({"cooldown_cross_group": val})
+            return f"✅ 跨群防连中冷却已{'开启' if val else '关闭'}（开启后所有群共享冷却，防止跨群连续中奖）。"
+        days = int(first)
         if days < 0:
             raise ValueError("天数不能为负")
         gs.update({"cooldown_days": days, "exclude_recent": days > 0})
-        return f"✅ 防连中冷却已设为 {days} 天。" if days else "✅ 已关闭防连中冷却。"
+        extra = "（跨群）" if gs.cooldown_cross_group else ""
+        return (f"✅ 防连中冷却已设为 {days} 天{extra}。"
+                if days else "✅ 已关闭防连中冷却。")
 
     def _h_exclude_admins(self, event, args, gs):
         if not args:
@@ -898,11 +923,13 @@ class GroupRafflePlugin(Star):
                 return None
             return msg
 
-        # 冷却排除
+        # 冷却排除（默认按本群；开启跨群冷却则统计所有群近期中奖者）
         cooldown = set()
         if gs.exclude_recent and gs.cooldown_days > 0:
             since = int(time.time()) - gs.cooldown_days * 86400
-            cooldown = self.db.recent_winner_uids(umo, since)
+            cooldown = self.db.recent_winner_uids(
+                None if gs.cooldown_cross_group else umo, since
+            )
         admin_uids = self.db.list_admin_uids(umo) if gs.exclude_admins else set()
 
         result = draw(
