@@ -41,7 +41,7 @@ def _result_cls():
     return MessageEventResult
 
 
-# 支持真实 @ 的平台前缀（aiocqhttp=OneBot；覆盖 NapCat/Lagrange/LLOneBot 等）
+# 支持真实 @ 的适配器【类型名】（aiocqhttp=OneBot；覆盖 NapCat/Lagrange/LLOneBot 等）
 AT_CAPABLE_PLATFORMS = ("aiocqhttp",)
 
 
@@ -54,8 +54,36 @@ def group_id_of(umo: str) -> str:
     return parts[2] if len(parts) >= 3 else (parts[-1] if parts else umo)
 
 
+def platform_supports_at(context, umo: str) -> bool:
+    """判断当前平台是否支持真实 @。
+
+    注意：unified_msg_origin 首段是平台适配器的【配置 id】（如用户自定义的
+    “EasonBot”），不是类型名；必须通过 context 找到该平台实例，看它的
+    meta().name（适配器类型名，如 aiocqhttp）是否支持 @。
+    """
+    tok = platform_of(umo)
+    if tok in AT_CAPABLE_PLATFORMS:
+        return True
+    try:
+        pm = getattr(context, "platform_manager", None)
+        insts = (list(getattr(pm, "platform_insts", None) or [])
+                 if pm is not None else [])
+        for p in insts:
+            try:
+                meta = p.meta()
+            except Exception:
+                continue
+            if getattr(meta, "id", None) == tok:
+                return getattr(meta, "name", "") in AT_CAPABLE_PLATFORMS
+    except Exception:
+        pass
+    # 找不到实例时：默认尝试真实 @（OneBot 类适配器的 id 是任意自定义名，
+    # 若确实不支持，发送失败会自动降级为文本，不会造成卡死）。
+    return True
+
+
 def can_at(umo: str) -> bool:
-    return platform_of(umo) in AT_CAPABLE_PLATFORMS
+    return True  # 兼容旧调用：真实能力以 platform_supports_at 判定为准
 
 
 def build_at_parts(uid_list: list, mc=None) -> list:
@@ -174,7 +202,7 @@ async def send_result(
     # 模拟时始终展示 @ 效果（若平台支持），真实时跟随群配置
     at_enabled = settings.at_winners if not simulate else True
     want_at = bool(at_enabled) and bool(winners_flat)
-    do_real_at = want_at and can_at(umo)
+    do_real_at = want_at and platform_supports_at(context, umo)
 
     # <winners> 占位符：真实@时用纯名字，否则用 @名字 文本降级（避免假 @ 与真 @ 并存）
     if do_real_at:
