@@ -52,9 +52,11 @@ try:
     )
     from .activity import ActivityTracker, now_local
     from .engine import draw, gather_candidates, DrawError
-    from .render import render_card
+    from .render import render_result_card, render_help_image
     from .notifier import send_result, group_id_of
     from .scheduler import RaffleScheduler, preview_next
+    from .help_data import help_rows_as_dicts, HELP_ROWS
+    from .web_api import WebApiHandler
 except ImportError:  # 平铺加载（AstrBot 直接加载 main.py）
     from db import Database  # type: ignore
     from settings import (  # type: ignore
@@ -75,9 +77,11 @@ except ImportError:  # 平铺加载（AstrBot 直接加载 main.py）
     )
     from activity import ActivityTracker, now_local  # type: ignore
     from engine import draw, gather_candidates, DrawError  # type: ignore
-    from render import render_card  # type: ignore
+    from render import render_result_card, render_help_image  # type: ignore
     from notifier import send_result, group_id_of  # type: ignore
     from scheduler import RaffleScheduler, preview_next  # type: ignore
+    from help_data import help_rows_as_dicts, HELP_ROWS  # type: ignore
+    from web_api import WebApiHandler  # type: ignore
 
 WEEK_MAP = {"一": 0, "二": 1, "三": 2, "四": 3, "五": 4, "六": 5, "日": 6, "天": 6}
 
@@ -103,39 +107,15 @@ def _on_off(s: str) -> bool:
     raise ValueError("请用 开/关")
 
 
-HELP = """🎰 群抽奖助手 GroupRaffle
-
-主命令：抽奖（英文别名 raffle，两者完全等价，如 raffle 开奖）
-
-【所有人可用】
-  抽奖 帮助            查看本帮助
-  抽奖 状态            查看本群抽奖配置
-  抽奖 报名            报名参与当前场次
-  抽奖 取消报名        取消报名
-  抽奖 名单            查看候选/报名/活跃情况
-
-【管理员】
-  抽奖 启用 / 停用     本群开关
-  抽奖 开奖 [人数]      立即开奖（可临时指定总人数，真实生效）
-  抽奖 模拟 [人数] [次数]  模拟开奖，不写库不@不发卡片，用于测试效果
-  抽奖 模式 等权|加权|报名
-  抽奖 等次 一等奖:1,二等奖:2
-  抽奖 冷却 <天数>      中奖后多少天内不再中（0=关闭）
-  抽奖 排除管理员 开|关
-  抽奖 艾特 开|关       是否 @ 中奖者
-  抽奖 卡片 开|关       是否渲染开奖卡片
-  抽奖 模板 <文本>      占位符 <winners> <count> <group> <time> <contact>
-  抽奖 窗口 <天数>      活跃度统计窗口
-  抽奖 定时 关
-  抽奖 定时 每日 20:00
-  抽奖 定时 每周 周一 20:00
-  抽奖 定时 双周 周一 20:00
-  抽奖 定时 每月 1 20:00
-  抽奖 定时 cron 0 20 * * 5
-  抽奖 定时预览        预览未来 3 次开奖时间
-
-所有抽奖设置均按群独立保存，重启后自动恢复。
-「抽奖 模拟」不会记录中奖、不清空报名、不发送通知，可放心反复测试。"""
+def _fallback_help_text() -> str:
+    """图片渲染失败时的纯文本帮助（内容来源同 help_data）。"""
+    lines = ["🎰 群抽奖助手 · 命令帮助",
+             "主命令：抽奖（英文别名 raffle，等价，如 /raffle 开奖）", ""]
+    for cmd, perm, desc in HELP_ROWS:
+        lines.append(f"[{perm}] {cmd} —— {desc}")
+    lines.append("")
+    lines.append("所有设置按群独立保存，重启自动恢复；「抽奖 模拟」不影响真实数据。")
+    return "\n".join(lines)
 
 
 @register_star(
@@ -163,7 +143,35 @@ class GroupRafflePlugin(Star):
             self.tracker.cleanup(int(config.get("data_retention_days", 60)))
         except Exception:
             pass
+        self._register_web_apis()
         logger.info("[GroupRaffle] 插件已加载")
+
+    def _register_web_apis(self):
+        """注册分群配置 Web API（供插件配置页调用）。"""
+        try:
+            api = WebApiHandler(self)
+            p = "astrbot_plugin_group_raffle"
+            ctx = self.context
+            ctx.register_web_api(
+                f"/{p}/overview", api.overview, ["GET"], "总览统计")
+            ctx.register_web_api(
+                f"/{p}/winners", api.list_winners, ["GET"], "中奖记录")
+            ctx.register_web_api(
+                f"/{p}/global", api.get_global, ["GET"], "获取全局配置")
+            ctx.register_web_api(
+                f"/{p}/global", api.update_global, ["POST"], "更新全局配置")
+            ctx.register_web_api(
+                f"/{p}/groups", api.list_groups, ["GET"], "列出所有群")
+            ctx.register_web_api(
+                f"/{p}/config/{{group_id}}", api.get_config, ["GET"], "获取单群配置")
+            ctx.register_web_api(
+                f"/{p}/config", api.update_config, ["POST"], "更新单群配置")
+            ctx.register_web_api(
+                f"/{p}/enable", api.enable_group, ["POST"], "启用/停用群")
+            ctx.register_web_api(
+                f"/{p}/draw", api.draw_now, ["POST"], "触发开奖")
+        except Exception as e:
+            logger.warning(f"[GroupRaffle] Web API 注册失败（可能是旧版 AstrBot）：{e}")
 
     async def initialize(self):
         self._reload_all_schedules()
@@ -248,9 +256,11 @@ class GroupRafflePlugin(Star):
         except Exception as e:
             logger.debug(f"[GroupRaffle] 活跃度记录失败: {e}")
 
-    # ---------------- 命令入口 ----------------
+    # ---------------- 命令入口（指令组） ----------------
 
-    @filter.command("抽奖", alias={"raffle"})
+    # 指令组「抽奖」（别名 raffle）。父组方法接收所有「抽奖 xxx」并内部分发；
+    # 下面的子指令 dummy 仅用于在指令树 / 行为管理中列出各子指令（中文显示）。
+    @filter.command_group("抽奖", alias={"raffle"})
     async def cmd_raffle(self, event):
         text = (event.message_str or "").strip()
         parts = text.split()
@@ -273,7 +283,8 @@ class GroupRafflePlugin(Star):
 
         # 无需群启用即可用的命令：帮助、启用
         if sub in ("help", "帮助", ""):
-            yield event.plain_result(HELP)
+            async for r in self._yield_help(event):
+                yield r
             return
 
         if sub in ("启用", "on"):
@@ -339,7 +350,97 @@ class GroupRafflePlugin(Star):
             logger.error(f"[GroupRaffle] 命令执行失败: {e}")
             yield event.plain_result(f"⚠️ 执行失败：{e}")
 
+    # ---- 子指令注册（仅用于指令树/行为管理展示，运行时由 cmd_raffle 统一分发）----
+    # 这些方法体不会被调用：指令组子指令在 waking 阶段不进入 activated_handlers。
+
+    @cmd_raffle.command("帮助")
+    async def _sub_help(self, event):
+        return
+
+    @cmd_raffle.command("状态")
+    async def _sub_status(self, event):
+        return
+
+    @cmd_raffle.command("报名")
+    async def _sub_join(self, event):
+        return
+
+    @cmd_raffle.command("取消报名")
+    async def _sub_quit(self, event):
+        return
+
+    @cmd_raffle.command("名单")
+    async def _sub_list(self, event):
+        return
+
+    @cmd_raffle.command("启用")
+    async def _sub_enable(self, event):
+        return
+
+    @cmd_raffle.command("停用")
+    async def _sub_disable(self, event):
+        return
+
+    @cmd_raffle.command("开奖")
+    async def _sub_draw(self, event, count: str = ""):
+        return
+
+    @cmd_raffle.command("模拟")
+    async def _sub_simulate(self, event, count: str = "", rounds: str = ""):
+        return
+
+    @cmd_raffle.command("模式")
+    async def _sub_mode(self, event, mode: str = ""):
+        return
+
+    @cmd_raffle.command("等次")
+    async def _sub_prizes(self, event, prizes: str = ""):
+        return
+
+    @cmd_raffle.command("冷却")
+    async def _sub_cooldown(self, event, days: str = ""):
+        return
+
+    @cmd_raffle.command("排除管理员")
+    async def _sub_exadmins(self, event, onoff: str = ""):
+        return
+
+    @cmd_raffle.command("艾特", alias={"at"})
+    async def _sub_at(self, event, onoff: str = ""):
+        return
+
+    @cmd_raffle.command("卡片")
+    async def _sub_card(self, event, onoff: str = ""):
+        return
+
+    @cmd_raffle.command("模板")
+    async def _sub_template(self, event, text: str = ""):
+        return
+
+    @cmd_raffle.command("窗口")
+    async def _sub_window(self, event, days: str = ""):
+        return
+
+    @cmd_raffle.command("定时")
+    async def _sub_schedule(self, event, *args):
+        return
+
+    @cmd_raffle.command("定时预览")
+    async def _sub_sched_preview(self, event):
+        return
+
     # ---------------- 子命令处理 ----------------
+
+    async def _yield_help(self, event):
+        """帮助：优先发送命令表图片，失败回退纯文本。"""
+        path = await render_help_image(self, help_rows_as_dicts())
+        if path:
+            try:
+                yield event.image_result(path)
+                return
+            except Exception as e:
+                logger.warning(f"[GroupRaffle] 帮助图片发送失败，回退文本：{e}")
+        yield event.plain_result(_fallback_help_text())
 
     def _h_disable(self, event, args, gs):
         gs.set_enabled(False)
@@ -676,16 +777,18 @@ class GroupRafflePlugin(Star):
         if note:
             notes.insert(0, note)
 
-        # 卡片（@ 不进卡片）
+        # 卡片（@ 不进卡片）；走 AstrBot 核心内置 html_render，失败自动降级 Pillow/文本
         card_path = None
         if gs.card_enabled and winners_flat:
             when = now_local().strftime("%Y-%m-%d %H:%M")
-            card_path = await render_card(
+            card_path = await render_result_card(
+                self,
                 tier_results=result.tiers,
                 group_name=group_id_of(umo),
                 when_str=when,
                 mode_label=MODE_LABELS.get(mode, mode),
                 pool_size=result.pool_size,
+                notes=notes,
             )
 
         contact = str(self.config.get("contact", "") or "")

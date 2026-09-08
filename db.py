@@ -5,6 +5,7 @@
 活跃度按「群 + 用户 + 天」聚合，不保存消息正文。
 """
 
+import json
 import os
 import sqlite3
 import threading
@@ -259,6 +260,70 @@ class Database:
                 (umo, ts, mode, trigger, result_json),
             )
             self.conn.commit()
+
+    # ---------- WebUI 统计 / 记录 ----------
+
+    def list_all_umos(self) -> list[str]:
+        with _LOCK:
+            rows = self.conn.execute(
+                "SELECT umo FROM users UNION SELECT umo FROM group_settings "
+                "UNION SELECT umo FROM winners UNION SELECT umo FROM draws"
+            ).fetchall()
+        return [r["umo"] for r in rows]
+
+    def list_winners(self, umo: str = None, limit: int = 200):
+        sql = (
+            "SELECT umo, uid, name, prize, ts FROM winners "
+            + ("WHERE umo=? " if umo else "")
+            + "ORDER BY ts DESC LIMIT ?"
+        )
+        args: list = ([umo] if umo else []) + [limit]
+        with _LOCK:
+            rows = self.conn.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
+
+    def count_winners(self, umo: str = None) -> int:
+        sql = "SELECT COUNT(*) c FROM winners" + (" WHERE umo=?" if umo else "")
+        with _LOCK:
+            row = self.conn.execute(sql, ([umo] if umo else [])).fetchone()
+        return int(row["c"])
+
+    def count_draws(self, umo: str = None) -> int:
+        sql = "SELECT COUNT(*) c FROM draws" + (" WHERE umo=?" if umo else "")
+        with _LOCK:
+            row = self.conn.execute(sql, ([umo] if umo else [])).fetchone()
+        return int(row["c"])
+
+    def stats_overview(self):
+        """全局总览统计。"""
+        with _LOCK:
+            groups = self.conn.execute(
+                "SELECT COUNT(DISTINCT umo) c FROM ("
+                "SELECT umo FROM users UNION SELECT umo FROM group_settings)"
+            ).fetchone()["c"]
+            members = self.conn.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
+            winners = self.conn.execute("SELECT COUNT(*) c FROM winners").fetchone()["c"]
+            draws = self.conn.execute("SELECT COUNT(*) c FROM draws").fetchone()["c"]
+            enabled = self.conn.execute(
+                "SELECT COUNT(*) c FROM group_settings WHERE enabled=1"
+            ).fetchone()["c"]
+        # 定时群数 = 有配置的群里，schedule.type != none 的
+        scheduled = 0
+        for r in self.list_settings_rows():
+            try:
+                cfg = json.loads(r["config_json"] or "{}")
+                if (cfg.get("schedule") or {}).get("type", "none") != "none":
+                    scheduled += 1
+            except Exception:
+                pass
+        return {
+            "groups": int(groups),
+            "members": int(members),
+            "winners": int(winners),
+            "draws": int(draws),
+            "enabled_groups": int(enabled),
+            "scheduled_groups": int(scheduled),
+        }
 
     # ---------- 分群配置 ----------
 

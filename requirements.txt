@@ -1,7 +1,7 @@
 # 定时调度必需
 APScheduler>=3.10,<4.0
 
-# 可选：卡片渲染（未安装时自动降级为 Pillow / 纯文本）
-# astrbot_plugin_htmlrender  （AstrBot 插件市场安装，非 pip 包）
-# 可选：Pillow 简版卡片（未安装时降级为纯文本）
+# 卡片/帮助图渲染说明：
+# - 优先使用 AstrBot 核心内置的 html_render（Jinja2 模板截图），无需任何额外插件。
+# - 若核心渲染不可用，自动降级为 Pillow 本地绘制（可选依赖，未安装则降级为纯文本）。
 # Pillow>=10.0

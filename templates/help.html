@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    width:760px;
+    background:#fffaf3;
+    color:#3a2a18;
+    padding:24px 26px;
+  }
+  .head { text-align:center; margin-bottom:6px; }
+  .head h1 { font-size:24px; color:#c2571a; letter-spacing:1px; }
+  .head p { font-size:13px; color:#9a6a3a; margin-top:6px; }
+  table { width:100%; border-collapse:collapse; margin-top:14px; font-size:13px; }
+  th, td { border:1px solid #f0dcc2; padding:7px 10px; text-align:left; vertical-align:middle; }
+  th { background:#ffe9d6; color:#a04a12; font-weight:700; white-space:nowrap; }
+  td.cmd { font-family:Consolas,Menlo,monospace; color:#b03a12; white-space:nowrap; font-weight:600; }
+  td.perm { white-space:nowrap; }
+  .perm-all { color:#2a7a3a; font-weight:600; }
+  .perm-admin { color:#c2571a; font-weight:600; }
+  tr:nth-child(even) td { background:#fff5ea; }
+  .tip { margin-top:12px; font-size:12px; color:#8a5a2a; line-height:1.6; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <h1>🎮 群抽奖助手 · 命令帮助</h1>
+    <p>主命令：<b>抽奖</b>（英文别名 <b>raffle</b>，两者完全等价，如 /raffle 开奖）</p>
+  </div>
+  <table>
+    <thead>
+      <tr><th>命令</th><th>权限</th><th>说明</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td class="cmd">{{ r.cmd }}</td>
+        <td class="perm">
+          {%- if r.perm == '所有人' -%}<span class="perm-all">所有人</span>
+          {%- else -%}<span class="perm-admin">管理员</span>{%- endif -%}
+        </td>
+        <td>{{ r.desc }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="tip">
+    · 所有抽奖设置均按群独立保存，重启后自动恢复。<br>
+    · 「抽奖 模拟」不会记录中奖、不清空报名、不发送通知，可放心反复测试。
+  </div>
+</body>
+</html>

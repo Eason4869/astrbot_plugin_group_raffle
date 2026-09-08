@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<style>
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    width:430px;
+    background:linear-gradient(160deg,#fff7ec 0%,#ffe9d6 55%,#ffd9b8 100%);
+    color:#5a3210;
+    padding:26px 26px 20px;
+  }
+  .title { text-align:center; font-size:26px; font-weight:800; letter-spacing:2px; }
+  .sub { text-align:center; font-size:12px; color:#9a6a3a; margin:8px 0 16px; }
+  .tier {
+    background:rgba(255,255,255,.72); border-radius:14px; padding:12px 16px; margin:10px 0;
+  }
+  .prize { font-size:15px; font-weight:700; color:#c2571a; margin-bottom:6px; }
+  .names { font-size:20px; font-weight:800; color:#3d2200; line-height:1.55; word-break:break-all; }
+  .short { font-size:12px; color:#b05a2a; font-weight:400; margin-left:6px; }
+  .foot { text-align:center; font-size:11px; color:#b08a5e; margin-top:14px; }
+  .note { font-size:12px; color:#8a5a2a; margin-top:6px; line-height:1.5; }
+</style>
+</head>
+<body>
+  <div class="title">🎊 开奖结果 🎊</div>
+  <div class="sub">{{ group }} · {{ mode_label }} · 候选 {{ pool_size }} 人 · {{ when }}</div>
+  {% for t in tiers %}
+  <div class="tier">
+    <div class="prize">{{ t.prize }}</div>
+    <div class="names">
+      {%- if t.winners -%}
+        {{ t.winners | join('、') }}
+      {%- else -%}
+        —
+      {%- endif -%}
+      {%- if t.shortage %}<span class="short">（缺 {{ t.shortage }} 名）</span>{% endif -%}
+    </div>
+  </div>
+  {% endfor %}
+  {% if notes %}
+  <div class="note">
+    {% for n in notes %}· {{ n }}<br>{% endfor %}
+  </div>
+  {% endif %}
+  <div class="foot">群抽奖助手 GroupRaffle</div>
+</body>
+</html>

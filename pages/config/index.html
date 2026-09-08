@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>群抽奖助手 · 管理面板</title>
+<style>
+  :root {
+    --bg: #f5f7fa; --card: #ffffff; --card2: #fafbfd; --line: #e9edf2;
+    --text: #23282f; --muted: #8a93a3; --brand: #e67e22; --brand-d: #c2571a;
+    --brand-l: #fff3e8; --ok: #2e9e4f; --ok-l: #e8f7ec; --danger: #e0483d;
+    --shadow: 0 2px 14px rgba(40,50,70,.06);
+  }
+  html[data-theme="dark"] {
+    --bg: #15171b; --card: #1e2128; --card2: #23272f; --line: #2c313a;
+    --text: #e9ecf1; --muted: #97a0af; --brand: #f0a04b; --brand-d: #f0a04b;
+    --brand-l: #33281d; --ok: #4bc471; --ok-l: #1e2f24; --danger: #ef6b61;
+    --shadow: 0 2px 14px rgba(0,0,0,.3);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+    background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5;
+  }
+  .topbar {
+    background: linear-gradient(120deg,var(--brand) 0%,#f0a04b 100%);
+    color:#fff; padding: 20px 28px; display:flex; align-items:center; gap:14px;
+  }
+  .topbar img { width:44px; height:44px; border-radius:11px; background:#fff2; }
+  .topbar h1 { font-size:19px; font-weight:800; letter-spacing:.5px; }
+  .topbar p { font-size:12px; opacity:.9; margin-top:2px; }
+  .wrap { max-width:1080px; margin: 0 auto; padding: 22px 20px 40px; }
+  .tabs { display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; }
+  .tab {
+    padding:9px 20px; border-radius:999px; background:var(--card); border:1px solid var(--line);
+    color:var(--muted); cursor:pointer; font-weight:600; font-size:14px; transition:.15s;
+  }
+  .tab:hover { border-color:var(--brand); color:var(--brand-d); }
+  .tab.active { background:var(--brand); color:#fff; border-color:var(--brand); box-shadow:var(--shadow); }
+  .view { display:none; animation: fade .2s; }
+  .view.active { display:block; }
+  @keyframes fade { from{opacity:0; transform:translateY(4px);} to{opacity:1;} }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:14px; margin-bottom:18px; }
+  .stat {
+    background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px;
+    box-shadow:var(--shadow); position:relative; overflow:hidden;
+  }
+  .stat .n { font-size:30px; font-weight:800; color:var(--brand-d); line-height:1; }
+  .stat .l { color:var(--muted); font-size:13px; margin-top:8px; }
+  .stat .ic { position:absolute; right:14px; top:14px; font-size:22px; opacity:.25; }
+  .panel {
+    background:var(--card); border:1px solid var(--line); border-radius:14px;
+    padding:18px 20px; box-shadow:var(--shadow); margin-bottom:16px;
+  }
+  .panel h2 { font-size:15px; margin-bottom:14px; display:flex; align-items:center; gap:8px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th,td { padding:9px 10px; text-align:left; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; font-size:12px; white-space:nowrap; }
+  tr:last-child td { border-bottom:none; }
+  .empty { color:var(--muted); text-align:center; padding:34px 0; }
+  .layout { display:flex; gap:16px; align-items:flex-start; }
+  .glist { width:288px; flex-shrink:0; max-height:70vh; overflow-y:auto; }
+  .gdetail { flex:1; min-width:0; }
+  .gitem { padding:11px 13px; border:1px solid var(--line); border-radius:11px; margin-bottom:9px;
+    cursor:pointer; transition:.15s; background:var(--card2); }
+  .gitem:hover { border-color:var(--brand); }
+  .gitem.active { border-color:var(--brand); background:var(--brand-l); }
+  .gitem .gid { font-weight:700; }
+  .gitem .meta { color:var(--muted); font-size:12px; margin-top:3px; }
+  .badge { display:inline-block; font-size:11px; padding:1px 9px; border-radius:999px; margin-left:6px; vertical-align:middle;}
+  .badge.on { background:var(--ok-l); color:var(--ok); }
+  .badge.off { background:var(--line); color:var(--muted); }
+  .badge.prize { background:var(--brand-l); color:var(--brand-d); margin:0; }
+  .row { display:flex; align-items:center; gap:12px; margin-bottom:13px; flex-wrap:wrap; }
+  .row label { width:130px; flex-shrink:0; color:var(--muted); }
+  .row .ctrl { flex:1; min-width:200px; }
+  input[type=text],input[type=number],select,textarea {
+    width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:9px;
+    background:var(--bg); color:var(--text); font-size:14px; font-family:inherit;
+  }
+  textarea { min-height:56px; resize:vertical; }
+  .switch { position:relative; width:46px; height:26px; flex-shrink:0; }
+  .switch input { display:none; }
+  .switch .slider { position:absolute; inset:0; background:var(--muted); border-radius:999px; cursor:pointer; transition:.2s; }
+  .switch .slider::after { content:""; position:absolute; width:20px; height:20px; left:3px; top:3px;
+    background:#fff; border-radius:50%; transition:.2s; }
+  .switch input:checked + .slider { background:var(--brand); }
+  .switch input:checked + .slider::after { transform:translateX(20px); }
+  .btns { display:flex; gap:10px; margin-top:18px; flex-wrap:wrap; }
+  button { padding:9px 20px; border:none; border-radius:9px; cursor:pointer; font-size:14px;
+    font-weight:600; font-family:inherit; transition:.15s; }
+  .btn-primary { background:var(--brand); color:#fff; }
+  .btn-primary:hover { background:var(--brand-d); }
+  .btn-ghost { background:var(--card2); border:1px solid var(--line); color:var(--text); }
+  .btn-ghost:hover { border-color:var(--brand); }
+  .hint { color:var(--muted); font-size:12px; margin-top:3px; }
+  .seg { display:flex; gap:6px; flex-wrap:wrap; }
+  .seg button { padding:6px 15px; border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  .seg button.sel { background:var(--brand); color:#fff; border-color:var(--brand); }
+  .next { font-size:12px; color:var(--muted); line-height:1.7; }
+  .section-title { font-size:13px; font-weight:700; color:var(--brand-d); margin:16px 0 11px;
+    padding-bottom:6px; border-bottom:1px dashed var(--line); }
+  .toast { position:fixed; bottom:26px; left:50%; transform:translateX(-50%);
+    background:var(--text); color:var(--bg); padding:11px 24px; border-radius:999px; font-size:13px;
+    opacity:0; transition:.25s; pointer-events:none; z-index:99; }
+  .toast.show { opacity:.95; }
+  .filters { display:flex; gap:10px; margin-bottom:6px; align-items:center; flex-wrap:wrap; }
+  .filters input { width:200px; }
+  .win-name { font-weight:700; color:var(--brand-d); }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div style="width:44px;height:44px;border-radius:11px;background:#ffffff33;display:flex;align-items:center;justify-content:center;font-size:26px;">🎰</div>
+  <div>
+    <h1>🎰 群抽奖助手 · 管理面板</h1>
+    <p>总览 · 中奖记录 · 全局配置 · 分群配置（设置按群独立保存，即时生效）</p>
+  </div>
+</div>
+<div class="wrap">
+  <div class="tabs">
+    <div class="tab active" data-view="overview">📊 总览</div>
+    <div class="tab" data-view="records">🏆 中奖记录</div>
+    <div class="tab" data-view="global">⚙️ 全局配置</div>
+    <div class="tab" data-view="groups">🎯 分群配置</div>
+  </div>
+
+  <!-- 总览 -->
+  <div class="view active" id="view-overview">
+    <div class="cards" id="stat-cards"></div>
+    <div class="panel">
+      <h2>🎉 最近中奖</h2>
+      <div id="overview-recent"><div class="empty">加载中…</div></div>
+    </div>
+  </div>
+
+  <!-- 中奖记录 -->
+  <div class="view" id="view-records">
+    <div class="panel">
+      <h2>🏆 中奖记录</h2>
+      <div class="filters">
+        <input type="text" id="rec-group" placeholder="按群号筛选（可空）">
+        <button class="btn-ghost" id="rec-reload">🔄 刷新</button>
+      </div>
+      <div id="records"><div class="empty">加载中…</div></div>
+    </div>
+  </div>
+
+  <!-- 全局配置 -->
+  <div class="view" id="view-global">
+    <div class="panel">
+      <h2>⚙️ 全局默认配置</h2>
+      <div id="global-form"><div class="empty">加载中…</div></div>
+    </div>
+  </div>
+
+  <!-- 分群配置 -->
+  <div class="view" id="view-groups">
+    <div class="layout">
+      <div class="panel glist">
+        <h2>群列表</h2>
+        <div id="groups"><div class="empty">加载中…</div></div>
+      </div>
+      <div class="panel gdetail">
+        <h2 id="detail-title">选择左侧群进行配置</h2>
+        <div id="detail"><div class="empty">暂无选中群</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const P = "/api/plug/astrbot_plugin_group_raffle";
+let groups = [], cur = null, curUmo = null;
+
+function toast(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("show");
+  setTimeout(()=>t.classList.remove("show"),2200);}
+const apiGet=(e,p)=>window.AstrBotPluginPage.apiGet(e,p);
+const apiPost=(e,b)=>window.AstrBotPluginPage.apiPost(e,b);
+
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  document.querySelectorAll(".view").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active");
+  document.getElementById("view-"+t.dataset.view).classList.add("active");
+  if(t.dataset.view==="overview") loadOverview();
+  if(t.dataset.view==="records") loadRecords();
+  if(t.dataset.view==="global") loadGlobal();
+  if(t.dataset.view==="groups") loadGroups();
+});
+
+const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const sw=(id,v)=>`<label class="switch"><input type="checkbox" id="${id}" ${v?"checked":""}><span class="slider"></span></label>`;
+const val=id=>document.getElementById(id).checked;
+const sval=id=>document.getElementById(id).value;
+const segVal=id=>document.querySelector("#"+id+" button.sel").dataset.v;
+
+function winnersTable(rows){
+  if(!rows.length) return `<div class="empty">暂无中奖记录</div>`;
+  return `<table><thead><tr><th>时间</th><th>群</th><th>中奖者</th><th>等次</th></tr></thead><tbody>`+
+    rows.map(r=>`<tr><td>${r.time_str}</td><td>${r.group_id}</td>
+      <td class="win-name">${esc(r.name||r.uid)}</td><td><span class="badge prize">${esc(r.prize)}</span></td></tr>`)
+    .join("")+`</tbody></table>`;
+}
+
+async function loadOverview(){
+  try{
+    const r=await apiGet(`${P}/overview`);
+    const s=(r&&r.data&&r.data.stats)||{};
+    const cards=[["🎯","启用群",s.enabled_groups],["📅","定时群",s.scheduled_groups],
+      ["👥","观测成员",s.members],["🎲","开奖次数",s.draws],["🏆","中奖人次",s.winners],["💬","总群数",s.groups]];
+    document.getElementById("stat-cards").innerHTML=cards.map(([ic,l,n])=>
+      `<div class="stat"><div class="ic">${ic}</div><div class="n">${n==null?0:n}</div><div class="l">${l}</div></div>`).join("");
+    document.getElementById("overview-recent").innerHTML=winnersTable((r&&r.data&&r.data.recent)||[]);
+  }catch(e){document.getElementById("overview-recent").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+}
+
+async function loadRecords(){
+  const gid=sval("rec-group").trim();
+  try{
+    const r=await apiGet(`${P}/winners`,gid?{group_id:gid,limit:300}:{limit:300});
+    document.getElementById("records").innerHTML=winnersTable((r&&r.data&&r.data.winners)||[]);
+  }catch(e){document.getElementById("records").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+}
+document.getElementById("rec-reload").onclick=loadRecords;
+
+async function loadGlobal(){
+  try{
+    const r=await apiGet(`${P}/global`);
+    const c=(r&&r.data)||{};
+    document.getElementById("global-form").innerHTML=`
+      <div class="row"><label>群启用模式</label><div class="ctrl"><div class="seg" id="g-mode">
+        ${[["blacklist","黑名单(默认全开)"],["whitelist","白名单(仅列出)"]].map(([k,v])=>
+          `<button data-v="${k}" class="${c.enabled_groups_mode===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
+      <div class="row"><label>群白名单</label><div class="ctrl"><input type="text" id="g-wl" value="${esc((c.group_whitelist||[]).join(","))}">
+        <div class="hint">群号，英文逗号分隔</div></div></div>
+      <div class="row"><label>群黑名单</label><div class="ctrl"><input type="text" id="g-bl" value="${esc((c.group_blacklist||[]).join(",""))}">
+        <div class="hint">群号，英文逗号分隔</div></div></div>
+      <div class="row"><label>额外管理员</label><div class="ctrl"><input type="text" id="g-admins" value="${esc((c.admins||[]).join(","))}">
+        <div class="hint">用户号，逗号分隔（群主/群管已自动有权限）</div></div></div>
+      <div class="row"><label>联系方式</label><div class="ctrl"><input type="text" id="g-contact" value="${esc(c.contact||"")}">
+        <div class="hint">模板中 &lt;contact&gt; 替换内容</div></div></div>
+      <div class="row"><label>默认中奖模板</label><div class="ctrl"><textarea id="g-tpl">${esc(c.default_template||"")}</textarea></div></div>
+      <div class="row"><label>默认卡片</label><div class="ctrl" style="flex:0">${sw("g-card",c.card_enabled)}</div></div>
+      <div class="row"><label>默认@中奖者</label><div class="ctrl" style="flex:0">${sw("g-at",c.at_enabled)}</div></div>
+      <div class="row"><label>新群默认模式</label><div class="ctrl"><div class="seg" id="g-defmode">
+        ${[["equal","全员等权"],["activity","活跃度加权"],["signup","报名参与"]].map(([k,v])=>
+          `<button data-v="${k}" class="${c.default_mode===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
+      <div class="row"><label>每日消息上限</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-cap" value="${c.daily_msg_cap??30}"></div></div>
+      <div class="row"><label>最小间隔(秒)</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-gap" value="${c.msg_min_gap_seconds??5}"></div></div>
+      <div class="row"><label>数据保留(天)</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-ret" value="${c.data_retention_days??60}"></div></div>
+      <div class="btns"><button class="btn-primary" id="g-save">💾 保存全局配置</button></div>`;
+    document.querySelectorAll("#g-mode button,#g-defmode button").forEach(b=>b.onclick=()=>{
+      const parent=b.parentElement;parent.querySelectorAll("button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");});
+    document.getElementById("g-save").onclick=saveGlobal;
+  }catch(e){document.getElementById("global-form").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+}
+
+function listCsv(s){return s.split(/[,，]/).map(x=>x.trim()).filter(Boolean);}
+async function saveGlobal(){
+  const patch={
+    enabled_groups_mode:segVal("g-mode"),
+    group_whitelist:listCsv(sval("g-wl")),
+    group_blacklist:listCsv(sval("g-bl")),
+    admins:listCsv(sval("g-admins")),
+    contact:sval("g-contact"),
+    default_template:sval("g-tpl"),
+    card_enabled:val("g-card"),
+    at_enabled:val("g-at"),
+    default_mode:segVal("g-defmode"),
+    daily_msg_cap:parseInt(sval("g-cap"),10)||30,
+    msg_min_gap_seconds:parseInt(sval("g-gap"),10)||5,
+    data_retention_days:parseInt(sval("g-ret"),10)||60,
+  };
+  try{
+    const r=await apiPost(`${P}/global`,{patch});
+    toast(r&&r.status==="ok"?"✅ 全局配置已保存":"❌ "+((r&&r.message)||"失败"));
+  }catch(e){toast("❌ "+e);}
+}
+
+async function loadGroups(){
+  try{
+    const r=await apiGet(`${P}/groups`);
+    groups=(r&&r.data&&r.data.groups)||[];
+    document.getElementById("groups").innerHTML=groups.length?groups.map(g=>
+      `<div class="gitem ${g.umo===curUmo?"active":""}" data-umo="${esc(g.umo)}">
+        <div class="gid">群 ${esc(g.group_id)}<span class="badge ${g.enabled?"on":"off"}">${g.enabled?"启用":"停用"}</span></div>
+        <div class="meta">${g.member_observed} 成员 · ${esc(g.schedule_desc)}</div></div>`).join("")
+      :`<div class="empty">还没有群。机器人入群发言，<br>或管理员发送「抽奖 启用」。</div>`;
+    document.querySelectorAll(".gitem").forEach(it=>it.onclick=()=>selectGroup(it.dataset.umo));
+  }catch(e){document.getElementById("groups").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+}
+
+async function selectGroup(umo){
+  curUmo=umo; loadGroups();
+  const r=await apiGet(`${P}/config/${encodeURIComponent(umo)}`);
+  cur=r&&r.data; if(!cur){toast("配置加载失败");return;}
+  renderDetail();
+}
+
+function renderDetail(){
+  const c=cur;
+  document.getElementById("detail-title").textContent=`群 ${c.group_id} 配置`;
+  const modes=[["equal","全员等权"],["activity","活跃度加权"],["signup","报名参与"]];
+  const st=[["none","关闭"],["daily","每日"],["weekly","每周"],["biweekly","每两周"],["monthly","每月"],["custom","cron"]];
+  document.getElementById("detail").innerHTML=`
+    <div class="row"><label>启用本群抽奖</label><div class="ctrl" style="flex:0">${sw("f-enabled",c.enabled)}</div></div>
+    <div class="section-title">参与与中奖</div>
+    <div class="row"><label>参与模式</label><div class="ctrl"><div class="seg" id="f-mode">
+      ${modes.map(([k,v])=>`<button data-v="${k}" class="${c.mode===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
+    <div class="row"><label>中奖等次名额</label><div class="ctrl"><input type="text" id="f-prizes"
+      value="${esc(c.prizes.map(p=>p.name+":"+p.count).join(","))}"><div class="hint">一等奖:1,二等奖:2</div></div></div>
+    <div class="row"><label>防连中冷却(天)</label><div class="ctrl" style="flex:0 0 160px">
+      <input type="number" id="f-cooldown" value="${c.cooldown_days}" min="0"></div></div>
+    <div class="row"><label>排除管理员</label><div class="ctrl" style="flex:0">${sw("f-exadmins",c.exclude_admins)}</div></div>
+    <div class="section-title">活跃度加权</div>
+    <div class="row"><label>统计窗口(天)</label><div class="ctrl" style="flex:0 0 160px"><input type="number" id="f-window" value="${c.activity_window_days}"></div></div>
+    <div class="row"><label>最低发言条数</label><div class="ctrl" style="flex:0 0 160px"><input type="number" id="f-mincount" value="${c.activity_min_count}"></div></div>
+    <div class="section-title">通知与卡片</div>
+    <div class="row"><label>@中奖者</label><div class="ctrl" style="flex:0">${sw("f-at",c.at_winners)}</div></div>
+    <div class="row"><label>开奖卡片</label><div class="ctrl" style="flex:0">${sw("f-card",c.card_enabled)}</div></div>
+    <div class="row"><label>中奖模板</label><div class="ctrl"><textarea id="f-template">${esc(c.template||"")}</textarea>
+      <div class="hint">占位符 &lt;winners&gt; &lt;count&gt; &lt;group&gt; &lt;time&gt; &lt;contact&gt;</div></div></div>
+    <div class="section-title">定时开奖</div>
+    <div class="row"><label>定时类型</label><div class="ctrl"><div class="seg" id="f-st">
+      ${st.map(([k,v])=>`<button data-v="${k}" class="${c.schedule.type===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
+    <div class="row"><label>时间(HH:MM)</label><div class="ctrl" style="flex:0 0 160px"><input type="text" id="f-time" value="${esc(c.schedule.time||"20:00")}"></div></div>
+    <div class="row" id="row-wd" style="display:none"><label>星期</label><div class="ctrl" style="flex:0 0 160px">
+      <select id="f-wd">${["周一","周二","周三","周四","周五","周六","周日"].map((w,i)=>
+        `<option value="${i}" ${c.schedule.weekday===i?"selected":""}>${w}</option>`).join("")}</select></div></div>
+    <div class="row" id="row-md" style="display:none"><label>每月日期</label><div class="ctrl" style="flex:0 0 160px">
+      <input type="number" id="f-md" value="${c.schedule.monthday||1}" min="1" max="28"></div></div>
+    <div class="row" id="row-cron" style="display:none"><label>cron</label><div class="ctrl">
+      <input type="text" id="f-cron" value="${esc(c.schedule.cron||"")}" placeholder="0 20 * * 5">
+      <div class="hint">5 段：分 时 日 月 周</div></div></div>
+    <div class="next" id="f-next">${(c.next_fires||[]).map(x=>"· "+x).join("<br>")}</div>
+    <div class="btns">
+      <button class="btn-primary" id="btn-save">💾 保存</button>
+      <button class="btn-ghost" id="btn-refresh">🔄 刷新</button>
+      <button class="btn-ghost" id="btn-draw">🎲 立即开奖</button>
+    </div>`;
+  document.querySelectorAll("#f-mode button,#f-st button").forEach(b=>b.onclick=()=>{
+    b.parentElement.querySelectorAll("button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");
+    if(b.parentElement.id==="f-st") syncSched();});
+  const syncSched=()=>{const t=segVal("f-st");
+    document.getElementById("row-wd").style.display=(t==="weekly"||t==="biweekly")?"flex":"none";
+    document.getElementById("row-md").style.display=(t==="monthly")?"flex":"none";
+    document.getElementById("row-cron").style.display=(t==="custom")?"flex":"none";};
+  syncSched();
+  document.getElementById("btn-save").onclick=save;
+  document.getElementById("btn-refresh").onclick=()=>selectGroup(curUmo);
+  document.getElementById("btn-draw").onclick=doDraw;
+}
+
+function readSched(){const t=segVal("f-st");const s={type:t,time:sval("f-time"),weekday:0,monthday:1,cron:""};
+  if(t==="weekly"||t==="biweekly")s.weekday=parseInt(sval("f-wd"),10);
+  if(t==="monthly")s.monthday=parseInt(sval("f-md"),10);
+  if(t==="custom")s.cron=sval("f-cron").trim();return s;}
+
+async function save(){
+  const patch={enabled:val("f-enabled"),mode:segVal("f-mode"),prizes:sval("f-prizes").trim(),
+    cooldown_days:parseInt(sval("f-cooldown"),10)||0,exclude_admins:val("f-exadmins"),
+    activity_window_days:parseInt(sval("f-window"),10)||7,activity_min_count:parseInt(sval("f-mincount"),10)||0,
+    at_winners:val("f-at"),card_enabled:val("f-card"),template:sval("f-template"),schedule:readSched()};
+  try{
+    const r=await apiPost(`${P}/config`,{umo:curUmo,patch});
+    if(r&&r.status==="ok"){toast("✅ 已保存");cur=r.data;renderDetail();loadGroups();}
+    else toast("❌ "+((r&&r.message)||"保存失败"));
+  }catch(e){toast("❌ "+e);}
+}
+async function doDraw(){
+  if(!confirm("确定立即开奖？会真实发送开奖消息并记录中奖。"))return;
+  try{const r=await apiPost(`${P}/draw`,{umo:curUmo});
+    toast(r&&r.status==="ok"?"🎲 开奖指令已执行":"❌ "+((r&&r.message)||"失败"));}
+  catch(e){toast("❌ "+e);}
+}
+
+window.AstrBotPluginPage.ready().then(loadOverview);
+</script>
+</body>
+</html>
