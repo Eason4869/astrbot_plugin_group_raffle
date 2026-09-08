@@ -190,6 +190,13 @@ class GroupRafflePlugin(Star):
     # ---------------- 基础工具 ----------------
 
     def _is_admin(self, event) -> bool:
+        """是否为管理员。
+
+        Admin 判定 = AstrBot 管理员/宿主（event.is_admin()）+ 本插件 admins 配置
+        + 群主/群管理员（部分平台通过消息里的角色标记）。此判定同样用于
+        @filter.permission_type(PermissionType.ADMIN) 的补充兜底，保证不止宿主
+        可操作管理员指令。
+        """
         try:
             if event.is_admin():
                 return True
@@ -197,7 +204,14 @@ class GroupRafflePlugin(Star):
             pass
         try:
             uid = str(event.get_sender_id())
-            if uid in {str(x) for x in self.config.get("admins", [])}:
+            if uid and uid in {str(x) for x in self.config.get("admins", [])}:
+                return True
+        except Exception:
+            pass
+        try:  # 群主 / 群管理员（平台提供 sender.role 时）
+            sender = getattr(getattr(event, "message_obj", None), "sender", None)
+            role = getattr(sender, "role", None)
+            if str(role).lower() in ("owner", "admin", "groupowner", "groupadmin"):
                 return True
         except Exception:
             pass
@@ -392,66 +406,79 @@ class GroupRafflePlugin(Star):
             yield r
 
     @cmd_raffle.command("启用", alias={"on"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_enable(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("停用", alias={"off"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_disable(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("开奖", alias={"draw"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_draw(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("模拟", alias={"simulate", "测试", "test"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_simulate(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("模式", alias={"mode"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_mode(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("等次", alias={"prizes"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_prizes(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("冷却", alias={"cooldown"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_cooldown(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("排除管理员", alias={"exclude"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_exadmins(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("艾特", alias={"at"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_at(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("卡片", alias={"card"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_card(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("模板", alias={"template"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_template(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("窗口", alias={"window"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_window(self, e):
         async for r in self._dispatch_command(e):
             yield r
 
     @cmd_raffle.command("定时", alias={"schedule"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def _sub_schedule(self, e):
         async for r in self._dispatch_command(e):
             yield r
@@ -585,6 +612,9 @@ class GroupRafflePlugin(Star):
                 raise ValueError("用法：抽奖 模拟 [人数]，例如：抽奖 模拟 3")
         err = await self.do_draw(gs.umo, trigger="manual",
                                  prizes_override=prizes, simulate=True)
+        if err:
+            # 模拟是预览工具：成员不足等情况给出更友好的提示，而不是冰冷报错
+            return f"无法模拟开奖：{err}"
         return err  # None 表示已发送模拟开奖消息
 
     def _h_mode(self, event, args, gs):
@@ -639,7 +669,8 @@ class GroupRafflePlugin(Star):
         val = _on_off(args[0])
         gs.update({"card_enabled": val})
         if val:
-            return "✅ 卡片渲染已开启。需安装 astrbot_plugin_htmlrender（未安装将自动降级为本地简版卡片/纯文本）。"
+            return ("✅ 卡片渲染已开启（使用 AstrBot 核心内置 html_render 渲染，"
+                    "无需安装 astrbot_plugin_htmlrender；浏览器不可用时自动降级为本地简版卡片/纯文本）。")
         return "✅ 卡片渲染已关闭，开奖以纯文本发送。"
 
     def _h_template(self, event, args, gs):

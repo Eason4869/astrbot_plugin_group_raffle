@@ -179,16 +179,31 @@
 <script>
 /* 群抽奖助手 · 管理面板
  * 数据层同时兼容两种加载方式：
- *   1) AstrBot 仪表盘嵌入页：通过 window.AstrBotPluginPage 桥接（带鉴权），优先使用；
- *   2) 独立打开 / 直接访问本页：回退为同源 fetch 直连 /api/plug/...（携带同源 cookie 鉴权）。
- * 这样即使页面被「独立打开」（不在仪表盘 iframe 里），也不会一直「加载中」、分页也能正常切换。
+ *   1) 仪表盘嵌入面板：使用 window.AstrBotPluginPage 桥接（父页面带鉴权），优先；
+ *   2) 同源独立打开 / 直接访问本页：回退为同源 fetch 直连 /api/plug/...，
+ *      自动携带仪表盘登录 token（localStorage 或同源 cookie），无需手动配置。
  */
 const PLUGIN = "astrbot_plugin_group_raffle";
-const LEGACY_API = "/api/plug/" + PLUGIN;
-const BRIDGE = window.AstrBotPluginPage;                    // 独立打开时为 undefined
-let USE_BRIDGE = !!(BRIDGE && BRIDGE.apiGet && BRIDGE.apiPost);
+const ORIGIN = window.location.origin;
+const OPAGUE_ORIGIN = !ORIGIN || ORIGIN === "null";   // 无 allow-same-origin 的沙箱 iframe
+const LEGACY_API = (OPAGUE_ORIGIN ? "" : ORIGIN) + "/api/plug/" + PLUGIN;
+const BRIDGE = window.AstrBotPluginPage;
+const USE_BRIDGE = !!(BRIDGE && BRIDGE.apiGet && BRIDGE.apiPost);
 
-// 归一化：桥接可能直接把 data 负载返回，这里统一成 {status,message,data} 信封，兼容两种形态。
+// 读取仪表盘登录态：SPA 将 JWT 存在 localStorage("token")，也尝试从 cookie 读取。
+function dashboardToken() {
+  try {
+    const t = localStorage.getItem("token");
+    if (t) return t;
+  } catch (e) { /* 沙箱下 localStorage 不可用则忽略 */ }
+  try {
+    const m = document.cookie.match(/(?:^|;\s*)(?:DASHBOARD_JWT|token)=([^;]*)/i);
+    if (m && m[1]) return decodeURIComponent(m[1]);
+  } catch (e) { /* 忽略 */ }
+  return "";
+}
+
+// 归一化：桥接可能直接把 data 负载返回，这里统一成 {status,message,data} 信封。
 function norm(r) {
   if (r && typeof r === "object" && typeof r.status === "string" && Object.prototype.hasOwnProperty.call(r, "data")) {
     return r;                                        // 完整信封原样
@@ -197,56 +212,65 @@ function norm(r) {
 }
 
 const callSub = sub => String(sub || "").replace(/^\/+/, "").replace(/\/+$/, "");
-function buildDirectGetUrl(sub, params) {
+function buildUrl(sub, query) {
   const p = callSub(sub).split("/").map(encodeURIComponent).join("/");
-  const qs = new URLSearchParams(params || {}).toString();
-  return LEGACY_API + "/" + p + (qs ? "?" + qs : "");
+  const qs = query ? "?" + new URLSearchParams(query).toString() : "";
+  return LEGACY_API + "/" + p + qs;
 }
-function buildDirectPostUrl(sub) {
-  return LEGACY_API + "/" + callSub(sub).split("/").map(encodeURIComponent).join("/");
+
+// 通用直连请求：open 等 → token 优先；失败 / 401 时回退 cookie 再试一次。
+async function request(sub, query, method, body) {
+  if (OPAGUE_ORIGIN) {
+    return { status: "error", message: "页面处于受限的沙箱环境，请改从 AstrBot 面板内打开「👑 管理面板」使用", data: null };
+  }
+  let lastErr = null;
+  for (const withToken of [true, false]) {
+    try {
+      const headers = { "Content-Type": "application/json" };
+      if (withToken) {
+        const t = dashboardToken();
+        if (t) headers.Authorization = "Bearer " + t;
+      }
+      const resp = await fetch(buildUrl(sub, query), {
+        method,
+        credentials: "include",
+        headers,
+        body: method === "GET" || body === undefined ? undefined : JSON.stringify(body),
+      });
+      const text = await resp.text();
+      let env = null;
+      try { env = text ? JSON.parse(text) : null; } catch (e) { env = null; }
+      if (resp.status === 401 || resp.status === 403) {
+        lastErr = { status: "error", message: "登录态校验失败（HTTP " + resp.status + "），请确认已登录 AstrBot 面板", data: null };
+        continue;                                     // 可能带错 token → 换无 token / cookie
+      }
+      if (env) return env;
+      throw Object.assign(new Error("接口响应异常（HTTP " + resp.status + "）"), { code: resp.status });
+    } catch (e) {
+      lastErr = { status: "error", message: String((e && e.message) || e) || "网络错误", data: null };
+      if (!withToken) break;                    // 无 token 那轮也失败 → 结束
+    }
+  }
+  return lastErr;
 }
 
 async function apiGet(sub, params) {
-  if (USE_BRIDGE) {
-    try {
-      return norm(await BRIDGE.apiGet(callSub(sub), params || {}));
-    } catch (e) {
-      return { status: "error", message: String((e && e.message) || e), data: null };
-    }
-  }
   try {
-    const resp = await fetch(buildDirectGetUrl(sub, params), { method: "GET", credentials: "same-origin" });
-    const env = await resp.json().catch(() => ({ status: "error", message: "响应解析失败", data: null }));
-    return env.status ? env : wrapError(resp.status);
+    if (USE_BRIDGE) return norm(await BRIDGE.apiGet(callSub(sub), params || {}));
+    const env = await request(sub, params, "GET");
+    return env.status ? env : { status: "ok", message: "", data: env };
   } catch (e) {
     return { status: "error", message: String((e && e.message) || e), data: null };
   }
 }
 
-function wrapError(status) {
-  return { status: "error", message: "请求失败（HTTP " + status + "），请确认已登录仪表盘", data: null };
-}
-
 async function apiPost(sub, body) {
-  if (USE_BRIDGE) {
-    try {
-      return norm(await BRIDGE.apiPost(callSub(sub), body || {}));
-    } catch (e) {
-      return { status: "error", message: String((e && e.message) || e), data: null };
-    }
-  }
   try {
-    const resp = await fetch(buildDirectPostUrl(sub), {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body || {}),
-    });
-    const env = await resp.json().catch(() => null);
-    if (!env) return wrapError(resp.status);
+    if (USE_BRIDGE) return norm(await BRIDGE.apiPost(callSub(sub), body || {}));
+    const env = await request(sub, null, "POST", body || {});
     return env.status ? env : { status: "ok", message: "", data: env };
   } catch (e) {
-    return { status: "error", message: String((e && e.message) || (e && e.status) || e), data: null };
+    return { status: "error", message: String((e && e.message) || e), data: null };
   }
 }
 

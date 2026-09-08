@@ -91,6 +91,7 @@ async def _render_via_core(star, template_name: str, data: dict, width: int) -> 
         result = await star.html_render(
             tmpl,
             data,
+            return_url=False,  # 让核心直接下载成 PNG 文件路径，而不是返回 URL
             options={
                 "width": width,
                 "full_page": True,
@@ -250,7 +251,7 @@ def _render_help_pillow(rows: list[dict]) -> Optional[str]:
         w = d.textbbox((0, 0), text, font=font)
         d.text(((W - (w[2] - w[0])) / 2, cy), text, font=font, fill=fill)
 
-    center_x(20, "🎮 群抽奖助手 · 命令帮助", f_title, (194, 87, 26))
+    center_x(20, "群抽奖助手 · 命令帮助", f_title, (194, 87, 26))
     center_x(56, "主命令：抽奖（英文别名 raffle，等价，如 /raffle 开奖）", f_sub, (154, 106, 58))
 
     # 表头
