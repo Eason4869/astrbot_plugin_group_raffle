@@ -215,21 +215,21 @@ async def main():
     gs.set_enabled(True)
 
     ev = await run_cmd(p, "抽奖 状态")
-    print("状态 -> images:", len(ev.image_sent), "plains:", ev.plain_sent[:1])
-    assert ev.image_sent, "状态未返回卡片图片"
+    print("状态 -> plains:", ev.plain_sent[:1])
+    assert ev.plain_sent, "状态未返回文本"
     assert ev.stopped, "状态未 stop_event，可能被 LLM 接管"
 
     ev = await run_cmd(p, "抽奖 名单")
-    print("名单 -> images:", len(ev.image_sent), "plains:", ev.plain_sent[:1])
-    assert ev.image_sent, "名单未返回卡片图片"
+    print("名单 -> plains:", ev.plain_sent[:1])
+    assert ev.plain_sent, "名单未返回文本"
     assert ev.stopped, "名单未 stop_event，可能被 LLM 接管"
 
     # 停用群后，只读信息命令仍应返回
     gs.set_enabled(False)
     ev = await run_cmd(p, "抽奖 状态")
-    assert ev.image_sent or ev.plain_sent, "停用后 状态 未返回结果"
+    assert ev.plain_sent, "停用后 状态 未返回结果"
     assert ev.stopped, "停用后 状态 未 stop_event"
-    print("-> 停用后 状态 仍返回:", bool(ev.image_sent or ev.plain_sent))
+    print("-> 停用后 状态 仍返回:", bool(ev.plain_sent))
 
     print("OK")
 
