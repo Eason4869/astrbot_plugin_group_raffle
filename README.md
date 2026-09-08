@@ -1,9 +1,10 @@
 <div align="center">
 
-![:name](https://count.getloli.com/@astrbot_plugin_group_raffle?name=astrbot_plugin_group_raffle&theme=minecraft&padding=6&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
-
+<img src="logo.png" width="128" height="128" alt="群抽奖助手 GroupRaffle logo">
 
 # 群抽奖助手 GroupRaffle
+
+[![浏览次数](https://count.getloli.com/@astrbot_plugin_group_raffle?name=astrbot_plugin_group_raffle&theme=minecraft&padding=6&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)](https://count.getloli.com/@astrbot_plugin_group_raffle)
 
 </div>
 
@@ -37,7 +38,7 @@ AstrBot 群聊抽奖插件：**每个群独立配置**，支持手动/定时开�
 
 ## 🎮 命令
 
-主命令：`抽奖`（英文别名 `raffle`）
+主命令：`抽奖`（英文别名 `raffle`，两者完全等价，如 `/raffle 开奖`）。
 
 | 命令 | 权限 | 说明 |
 |---|---|---|
@@ -46,7 +47,8 @@ AstrBot 群聊抽奖插件：**每个群独立配置**，支持手动/定时开�
 | `抽奖 报名` / `抽奖 取消报名` | 所有人 | 报名模式下参与/退出 |
 | `抽奖 名单` | 所有人 | 查看报名名单 / 活跃榜 / 已观测成员 |
 | `抽奖 启用` / `抽奖 停用` | 管理员 | 本群开关（停用同时暂停定时） |
-| `抽奖 开奖 [人数]` | 管理员 | 立即开奖；可临时指定人数 |
+| `抽奖 开奖 [人数]` | 管理员 | 立即开奖（真实生效）；可临时指定人数 |
+| `抽奖 模拟 [人数] [轮数]` | 管理员 | 模拟开奖测试效果：不记录中奖、不清报名、不 @、不发卡片，可反复执行，如 `抽奖 模拟 3 5` |
 | `抽奖 模式 等权\|加权\|报名` | 管理员 | 参与模式 |
 | `抽奖 等次 一等奖:1,二等奖:2` | 管理员 | 设置等次与名额 |
 | `抽奖 冷却 7` | 管理员 | 防连中冷却天数（0 关闭） |

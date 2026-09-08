@@ -105,8 +105,10 @@ def _on_off(s: str) -> bool:
 
 HELP = """🎰 群抽奖助手 GroupRaffle
 
+主命令：抽奖（英文别名 raffle，两者完全等价，如 raffle 开奖）
+
 【所有人可用】
-  抽奖 / raffle        查看本帮助
+  抽奖 帮助            查看本帮助
   抽奖 状态            查看本群抽奖配置
   抽奖 报名            报名参与当前场次
   抽奖 取消报名        取消报名
@@ -114,7 +116,8 @@ HELP = """🎰 群抽奖助手 GroupRaffle
 
 【管理员】
   抽奖 启用 / 停用     本群开关
-  抽奖 开奖 [人数]      立即开奖（可临时指定总人数）
+  抽奖 开奖 [人数]      立即开奖（可临时指定总人数，真实生效）
+  抽奖 模拟 [人数] [次数]  模拟开奖，不写库不@不发卡片，用于测试效果
   抽奖 模式 等权|加权|报名
   抽奖 等次 一等奖:1,二等奖:2
   抽奖 冷却 <天数>      中奖后多少天内不再中（0=关闭）
@@ -131,14 +134,15 @@ HELP = """🎰 群抽奖助手 GroupRaffle
   抽奖 定时 cron 0 20 * * 5
   抽奖 定时预览        预览未来 3 次开奖时间
 
-所有抽奖设置均按群独立保存，重启后自动恢复。"""
+所有抽奖设置均按群独立保存，重启后自动恢复。
+「抽奖 模拟」不会记录中奖、不清空报名、不发送通知，可放心反复测试。"""
 
 
 @register_star(
     "astrbot_plugin_group_raffle",
     "Eason4869",
     "群抽奖助手 GroupRaffle：分群配置/定时/活跃度加权/报名/多等次/@/卡片",
-    "0.1.0",
+    "0.2.0",
 )
 class GroupRafflePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -246,13 +250,17 @@ class GroupRafflePlugin(Star):
 
     # ---------------- 命令入口 ----------------
 
-    @filter.command("抽奖")
-    @filter.command("raffle")
+    @filter.command("抽奖", alias={"raffle"})
     async def cmd_raffle(self, event):
         text = (event.message_str or "").strip()
         parts = text.split()
         if parts and parts[0].lstrip("/").lower() in ("抽奖", "raffle"):
             parts = parts[1:]
+        # 兼容带唤醒前缀的形式（如 /抽奖、/raffle）
+        if parts:
+            first = parts[0].lstrip("/")
+            if first in ("抽奖", "raffle"):
+                parts = parts[1:]
         sub = parts[0] if parts else "help"
         args = parts[1:] if len(parts) > 1 else []
 
@@ -291,6 +299,10 @@ class GroupRafflePlugin(Star):
             "名单": self._h_list,
             "开奖": self._h_draw,
             "draw": self._h_draw,
+            "模拟": self._h_simulate,
+            "simulate": self._h_simulate,
+            "测试": self._h_simulate,
+            "test": self._h_simulate,
             "模式": self._h_mode,
             "等次": self._h_prizes,
             "冷却": self._h_cooldown,
@@ -402,6 +414,62 @@ class GroupRafflePlugin(Star):
                 raise ValueError("开奖人数必须是正整数，例如：抽奖 开奖 3")
         err = await self.do_draw(gs.umo, trigger="manual", prizes_override=prizes)
         return err  # None 表示已成功发送开奖消息
+
+    async def _h_simulate(self, event, args, gs):
+        """模拟开奖：只计算结果并以纯文本返回，不写库、不 @、不发卡片、不清报名。"""
+        prizes = gs.prizes
+        rounds = 1
+        if args:
+            try:
+                n = int(args[0])
+                assert n > 0
+                prizes = [{"name": "模拟奖", "count": n}]
+            except Exception:
+                raise ValueError("用法：抽奖 模拟 [每次人数] [轮数]，例如：抽奖 模拟 3 5")
+        if len(args) >= 2:
+            try:
+                rounds = int(args[1])
+                assert 1 <= rounds <= 20
+            except Exception:
+                raise ValueError("轮数需为 1-20 的整数，例如：抽奖 模拟 3 5")
+
+        mode = gs.mode
+        signup_sid = self._sid(gs.umo) if mode == MODE_SIGNUP else None
+        try:
+            candidates, weights, note = gather_candidates(
+                mode=mode, settings=gs, db=self.db,
+                activity=self.tracker, signup_sid=signup_sid,
+            )
+        except DrawError as e:
+            return f"⚠️ 无法模拟：{e}"
+
+        cooldown = set()
+        if gs.exclude_recent and gs.cooldown_days > 0:
+            since = int(time.time()) - gs.cooldown_days * 86400
+            cooldown = self.db.recent_winner_uids(gs.umo, since)
+        admin_uids = self.db.list_admin_uids(gs.umo) if gs.exclude_admins else set()
+
+        lines = [f"🧪 模拟开奖（{MODE_LABELS.get(mode, mode)}，{note or ''}，"
+                 f"不影响真实数据）"]
+        for r in range(rounds):
+            result = draw(
+                mode=mode, prizes=prizes, candidates=candidates, weights=weights,
+                cooldown_uids=cooldown, exclude_admins=gs.exclude_admins,
+                admin_uids=admin_uids,
+            )
+            if rounds > 1:
+                lines.append(f"—— 第 {r + 1} 轮 ——")
+            for tier in result.tiers:
+                names = "、".join(n for _, n in tier.winners) or "（候选不足，未抽出）"
+                line = f"【{tier.prize}】{names}"
+                if tier.shortage:
+                    line += f"（缺 {tier.shortage} 名）"
+                lines.append(line)
+            for nt in result.notes:
+                lines.append(f"（{nt}）")
+        if mode == MODE_SIGNUP:
+            lines.append("提示：报名模式模拟使用当前场次名单，但不会清空。")
+        return "\n".join(lines)
 
     def _h_mode(self, event, args, gs):
         if not args:
