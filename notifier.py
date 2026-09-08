@@ -67,8 +67,10 @@ def render_template(template: str, winners_text: str, count: int, group_name: st
     )
 
 
-def build_text(tier_lines: list[str], body: str, notes: list[str]) -> str:
-    parts = ["🎊 开奖结果 🎊", ""]
+def build_text(tier_lines: list[str], body: str, notes: list[str],
+               simulate: bool = False) -> str:
+    head = "🧪 模拟开奖（结果不会记录）🧪" if simulate else "🎊 开奖结果 🎊"
+    parts = [head, ""]
     parts.extend(tier_lines)
     if body:
         parts.append("")
@@ -76,6 +78,9 @@ def build_text(tier_lines: list[str], body: str, notes: list[str]) -> str:
     if notes:
         parts.append("")
         parts.extend(f"（{n}）" for n in notes)
+    if simulate:
+        parts.append("")
+        parts.append("※ 本次为模拟开奖：未记录中奖、未清空报名，真实抽奖不受影响。")
     return "\n".join(parts).strip()
 
 
@@ -90,6 +95,7 @@ async def send_result(
     contact: str,
     card_image_path: Optional[str] = None,
     group_name: str = "",
+    simulate: bool = False,
 ):
     """发送开奖消息。返回 (used_at: bool, used_card: bool)。"""
     from astrbot.core.message.components import Plain, Image
@@ -110,9 +116,11 @@ async def send_result(
         group_name or group_id_of(umo),
         contact,
     )
-    text = build_text(tier_lines, body, notes)
+    text = build_text(tier_lines, body, notes, simulate=simulate)
 
-    want_at = bool(settings.at_winners) and bool(winners_flat)
+    # 模拟时始终展示 @ 效果（若平台支持），真实时跟随群配置
+    at_enabled = settings.at_winners if not simulate else True
+    want_at = bool(at_enabled) and bool(winners_flat)
     do_at = want_at and can_at(umo)
 
     chain: list = []

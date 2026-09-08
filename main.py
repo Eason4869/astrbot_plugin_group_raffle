@@ -517,60 +517,19 @@ class GroupRafflePlugin(Star):
         return err  # None 表示已成功发送开奖消息
 
     async def _h_simulate(self, event, args, gs):
-        """模拟开奖：只计算结果并以纯文本返回，不写库、不 @、不发卡片、不清报名。"""
+        """模拟开奖：与真实开奖完全一样地发送卡片/@/模板中奖消息，
+        但不写中奖记录、不写流水、不清空报名。"""
         prizes = gs.prizes
-        rounds = 1
         if args:
             try:
                 n = int(args[0])
                 assert n > 0
                 prizes = [{"name": "模拟奖", "count": n}]
             except Exception:
-                raise ValueError("用法：抽奖 模拟 [每次人数] [轮数]，例如：抽奖 模拟 3 5")
-        if len(args) >= 2:
-            try:
-                rounds = int(args[1])
-                assert 1 <= rounds <= 20
-            except Exception:
-                raise ValueError("轮数需为 1-20 的整数，例如：抽奖 模拟 3 5")
-
-        mode = gs.mode
-        signup_sid = self._sid(gs.umo) if mode == MODE_SIGNUP else None
-        try:
-            candidates, weights, note = gather_candidates(
-                mode=mode, settings=gs, db=self.db,
-                activity=self.tracker, signup_sid=signup_sid,
-            )
-        except DrawError as e:
-            return f"⚠️ 无法模拟：{e}"
-
-        cooldown = set()
-        if gs.exclude_recent and gs.cooldown_days > 0:
-            since = int(time.time()) - gs.cooldown_days * 86400
-            cooldown = self.db.recent_winner_uids(gs.umo, since)
-        admin_uids = self.db.list_admin_uids(gs.umo) if gs.exclude_admins else set()
-
-        lines = [f"🧪 模拟开奖（{MODE_LABELS.get(mode, mode)}，{note or ''}，"
-                 f"不影响真实数据）"]
-        for r in range(rounds):
-            result = draw(
-                mode=mode, prizes=prizes, candidates=candidates, weights=weights,
-                cooldown_uids=cooldown, exclude_admins=gs.exclude_admins,
-                admin_uids=admin_uids,
-            )
-            if rounds > 1:
-                lines.append(f"—— 第 {r + 1} 轮 ——")
-            for tier in result.tiers:
-                names = "、".join(n for _, n in tier.winners) or "（候选不足，未抽出）"
-                line = f"【{tier.prize}】{names}"
-                if tier.shortage:
-                    line += f"（缺 {tier.shortage} 名）"
-                lines.append(line)
-            for nt in result.notes:
-                lines.append(f"（{nt}）")
-        if mode == MODE_SIGNUP:
-            lines.append("提示：报名模式模拟使用当前场次名单，但不会清空。")
-        return "\n".join(lines)
+                raise ValueError("用法：抽奖 模拟 [人数]，例如：抽奖 模拟 3")
+        err = await self.do_draw(gs.umo, trigger="manual",
+                                 prizes_override=prizes, simulate=True)
+        return err  # None 表示已发送模拟开奖消息
 
     def _h_mode(self, event, args, gs):
         if not args:
@@ -707,8 +666,12 @@ class GroupRafflePlugin(Star):
     # ---------------- 开奖核心 ----------------
 
     async def do_draw(self, umo: str, trigger: str = "manual",
-                      prizes_override=None) -> str | None:
-        """执行开奖并发送结果。返回 None=成功；str=错误信息（未发送开奖消息）。"""
+                      prizes_override=None, simulate: bool = False) -> str | None:
+        """执行开奖并发送结果。返回 None=成功；str=错误信息（未发送开奖消息）。
+
+        simulate=True：完整渲染卡片/@/模板发送，但不写中奖记录、不写开奖流水、
+        不清空报名（模拟模式下强制展示卡片与 @，忽略群配置中的开关）。
+        """
         from astrbot.core.message.components import Plain
 
         gs = self.store.get(umo)
@@ -758,28 +721,32 @@ class GroupRafflePlugin(Star):
                 winner_rows.append((uid, name, tier.prize))
 
         ts = int(time.time())
-        if winner_rows:
-            self.db.add_winners(umo, winner_rows, ts)
-        self.db.add_draw_log(
-            umo, ts, mode, trigger,
-            json.dumps({"note": note, "pool": result.pool_size,
-                        "tiers": [{"prize": t.prize, "winners": [n for _, n in t.winners],
-                                   "shortage": t.shortage} for t in result.tiers]},
-                       ensure_ascii=False),
-        )
+        if not simulate:
+            if winner_rows:
+                self.db.add_winners(umo, winner_rows, ts)
+            self.db.add_draw_log(
+                umo, ts, mode, trigger,
+                json.dumps({"note": note, "pool": result.pool_size,
+                            "tiers": [{"prize": t.prize, "winners": [n for _, n in t.winners],
+                                       "shortage": t.shortage} for t in result.tiers]},
+                           ensure_ascii=False),
+            )
 
-        # 报名模式：清场并开启新场次
-        if mode == MODE_SIGNUP and signup_sid is not None:
-            self.db.clear_signups(umo, signup_sid)
-            self._signup_sid[umo] = signup_sid + 1
+            # 报名模式：清场并开启新场次
+            if mode == MODE_SIGNUP and signup_sid is not None:
+                self.db.clear_signups(umo, signup_sid)
+                self._signup_sid[umo] = signup_sid + 1
 
         notes = list(result.notes)
         if note:
             notes.insert(0, note)
+        if simulate:
+            notes.insert(0, "本次为模拟开奖")
 
-        # 卡片（@ 不进卡片）；走 AstrBot 核心内置 html_render，失败自动降级 Pillow/文本
+        # 卡片（@ 不进卡片）。模拟时强制出卡片；真实时跟随群配置。
+        card_wanted = winners_flat and (gs.card_enabled or simulate)
         card_path = None
-        if gs.card_enabled and winners_flat:
+        if card_wanted:
             when = now_local().strftime("%Y-%m-%d %H:%M")
             card_path = await render_result_card(
                 self,
@@ -789,6 +756,7 @@ class GroupRafflePlugin(Star):
                 mode_label=MODE_LABELS.get(mode, mode),
                 pool_size=result.pool_size,
                 notes=notes,
+                simulate=simulate,
             )
 
         contact = str(self.config.get("contact", "") or "")
@@ -803,6 +771,7 @@ class GroupRafflePlugin(Star):
                 contact=contact,
                 card_image_path=card_path,
                 group_name=group_id_of(umo),
+                simulate=simulate,
             )
         except Exception as e:
             logger.error(f"[GroupRaffle] 开奖消息发送失败: {e}")

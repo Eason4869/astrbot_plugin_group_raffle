@@ -33,13 +33,16 @@ def _out_dir() -> str:
 # ---------------- 主入口 ----------------
 
 async def render_result_card(star, tier_results, group_name, when_str,
-                             mode_label, pool_size, notes=None) -> Optional[str]:
+                             mode_label, pool_size, notes=None,
+                             simulate: bool = False) -> Optional[str]:
     """开奖卡片。star=插件实例（用于调用内置 html_render）。返回图片路径或 None。"""
     data = {
         "group": html.escape(group_name or "本群"),
         "when": html.escape(when_str),
         "mode_label": html.escape(mode_label),
         "pool_size": pool_size,
+        "simulate": simulate,
+        "title": "🧪 模拟开奖（不记录）" if simulate else "🎊 开奖结果 🎊",
         "tiers": [
             {
                 "prize": t.prize,
@@ -48,7 +51,7 @@ async def render_result_card(star, tier_results, group_name, when_str,
             }
             for t in tier_results
         ],
-        "notes": notes or [],
+        "notes": (list(notes or []) + (["※ 模拟开奖，未记录中奖、未清空报名"] if simulate else [])),
     }
     # 1) 核心内置 html_render
     path = await _render_via_core(star, "card.html", data, width=430)
@@ -57,7 +60,8 @@ async def render_result_card(star, tier_results, group_name, when_str,
     # 2) Pillow 兜底
     try:
         return await asyncio.to_thread(
-            _render_pillow, tier_results, group_name, when_str, mode_label, pool_size
+            _render_pillow, tier_results, group_name, when_str, mode_label,
+            pool_size, simulate,
         )
     except Exception:
         return None
@@ -158,12 +162,14 @@ def _wrap_text(draw, text, font, max_w):
     return lines or [""]
 
 
-def _render_pillow(tier_results, group_name, when_str, mode_label, pool_size) -> Optional[str]:
+def _render_pillow(tier_results, group_name, when_str, mode_label, pool_size,
+                   simulate: bool = False) -> Optional[str]:
     from PIL import Image, ImageDraw
 
     W = 460
     pad = 28
-    f_title = _find_cjk_font(30)
+    title_text = "🧪 模拟开奖（不记录）" if simulate else "🎊 开奖结果 🎊"
+    f_title = _find_cjk_font(26 if simulate else 30)
     f_sub = _find_cjk_font(14)
     f_prize = _find_cjk_font(17)
     f_name = _find_cjk_font(21)
@@ -190,7 +196,7 @@ def _render_pillow(tier_results, group_name, when_str, mode_label, pool_size) ->
         w = d.textbbox((0, 0), text, font=font)
         d.text(((W - (w[2] - w[0])) / 2, cy), text, font=font, fill=fill)
 
-    center(20, "🎊 开奖结果 🎊", f_title, (194, 87, 26))
+    center(20, title_text, f_title, (194, 87, 26))
     center(66, f"{group_name or '本群'} · {mode_label} · 候选{pool_size}人 · {when_str}",
            f_sub, (154, 106, 58))
 
