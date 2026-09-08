@@ -39,14 +39,14 @@
   "default_template": {
     "description": "默认中奖消息模板",
     "type": "text",
-    "default": "🎉 恭喜 <winners> 中奖！<contact>请获奖者留意群内通知并联系管理员领取奖品。",
-    "hint": "可用占位符：<winners> 中奖者名单、<count> 中奖人数、<group> 群号、<time> 开奖时间、<contact> 联系方式。各群可用「抽奖 模板」单独设置。"
+    "default": "🎉 恭喜 <winners> 中奖！请尽快联系群主/管理员领取奖品。",
+    "hint": "可用占位符：<winners> 中奖者名单、<count> 中奖人数、<group> 群号、<time> 开奖时间、<contact> 联系方式。若需要，可把联系信息写进 <contact>（会在模板末尾追加）。各群可用「抽奖 模板」单独设置。"
   },
   "contact": {
     "description": "联系方式",
     "type": "string",
     "default": "",
-    "hint": "模板中 <contact> 替换成的文本，例如：请联系QQ 10001 领取。留空则不追加。"
+    "hint": "追加在默认模板末尾的联系方式文本（模板含 <contact> 才会替换），例如：领奖请联系管理员 QQ 10001。留空则不追加。"
   },
   "default_mode": {
     "description": "新群默认参与模式",

@@ -104,6 +104,9 @@
     background:var(--text); color:var(--bg); padding:11px 24px; border-radius:999px; font-size:13px;
     opacity:0; transition:.25s; pointer-events:none; z-index:99; }
   .toast.show { opacity:.95; }
+  .top-meta { margin-left:auto; display:flex; align-items:center; gap:10px; }
+  .mode { font-size:11px; background:rgba(255,255,255,.22); padding:4px 12px; border-radius:999px; letter-spacing:.3px; }
+  .view.active { display:block; animation: fade .18s ease; }
   .filters { display:flex; gap:10px; margin-bottom:6px; align-items:center; flex-wrap:wrap; }
   .filters input { width:200px; }
   .win-name { font-weight:700; color:var(--brand-d); }
@@ -115,6 +118,9 @@
   <div>
     <h1>🎰 群抽奖助手 · 管理面板</h1>
     <p>总览 · 中奖记录 · 全局配置 · 分群配置（设置按群独立保存，即时生效）</p>
+  </div>
+  <div class="top-meta">
+    <span class="mode">…</span>
   </div>
 </div>
 <div class="wrap">
@@ -171,212 +177,343 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const P = "/api/plug/astrbot_plugin_group_raffle";
+/* 群抽奖助手 · 管理面板
+ * 数据层同时兼容两种加载方式：
+ *   1) AstrBot 仪表盘嵌入页：通过 window.AstrBotPluginPage 桥接（带鉴权），优先使用；
+ *   2) 独立打开 / 直接访问本页：回退为同源 fetch 直连 /api/plug/...（携带同源 cookie 鉴权）。
+ * 这样即使页面被「独立打开」（不在仪表盘 iframe 里），也不会一直「加载中」、分页也能正常切换。
+ */
+const PLUGIN = "astrbot_plugin_group_raffle";
+const LEGACY_API = "/api/plug/" + PLUGIN;
+const BRIDGE = window.AstrBotPluginPage;                    // 独立打开时为 undefined
+let USE_BRIDGE = !!(BRIDGE && BRIDGE.apiGet && BRIDGE.apiPost);
+
+// 归一化：桥接可能直接把 data 负载返回，这里统一成 {status,message,data} 信封，兼容两种形态。
+function norm(r) {
+  if (r && typeof r === "object" && typeof r.status === "string" && Object.prototype.hasOwnProperty.call(r, "data")) {
+    return r;                                        // 完整信封原样
+  }
+  return { status: "ok", message: "", data: r };     // 负载包一层标准信封
+}
+
+const callSub = sub => String(sub || "").replace(/^\/+/, "").replace(/\/+$/, "");
+function buildDirectGetUrl(sub, params) {
+  const p = callSub(sub).split("/").map(encodeURIComponent).join("/");
+  const qs = new URLSearchParams(params || {}).toString();
+  return LEGACY_API + "/" + p + (qs ? "?" + qs : "");
+}
+function buildDirectPostUrl(sub) {
+  return LEGACY_API + "/" + callSub(sub).split("/").map(encodeURIComponent).join("/");
+}
+
+async function apiGet(sub, params) {
+  if (USE_BRIDGE) {
+    try {
+      return norm(await BRIDGE.apiGet(callSub(sub), params || {}));
+    } catch (e) {
+      return { status: "error", message: String((e && e.message) || e), data: null };
+    }
+  }
+  try {
+    const resp = await fetch(buildDirectGetUrl(sub, params), { method: "GET", credentials: "same-origin" });
+    const env = await resp.json().catch(() => ({ status: "error", message: "响应解析失败", data: null }));
+    return env.status ? env : wrapError(resp.status);
+  } catch (e) {
+    return { status: "error", message: String((e && e.message) || e), data: null };
+  }
+}
+
+function wrapError(status) {
+  return { status: "error", message: "请求失败（HTTP " + status + "），请确认已登录仪表盘", data: null };
+}
+
+async function apiPost(sub, body) {
+  if (USE_BRIDGE) {
+    try {
+      return norm(await BRIDGE.apiPost(callSub(sub), body || {}));
+    } catch (e) {
+      return { status: "error", message: String((e && e.message) || e), data: null };
+    }
+  }
+  try {
+    const resp = await fetch(buildDirectPostUrl(sub), {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const env = await resp.json().catch(() => null);
+    if (!env) return wrapError(resp.status);
+    return env.status ? env : { status: "ok", message: "", data: env };
+  } catch (e) {
+    return { status: "error", message: String((e && e.message) || (e && e.status) || e), data: null };
+  }
+}
+
 let groups = [], cur = null, curUmo = null;
 
-function toast(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("show");
-  setTimeout(()=>t.classList.remove("show"),2200);}
-const apiGet=(e,p)=>window.AstrBotPluginPage.apiGet(e,p);
-const apiPost=(e,b)=>window.AstrBotPluginPage.apiPost(e,b);
+function toast(m) {
+  const t = document.getElementById("toast");
+  t.textContent = m;
+  t.classList.add("show");
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove("show"), 2400);
+}
 
-document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
-  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
-  document.querySelectorAll(".view").forEach(x=>x.classList.remove("active"));
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
+  document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+  document.querySelectorAll(".view").forEach(x => x.classList.remove("active"));
   t.classList.add("active");
-  document.getElementById("view-"+t.dataset.view).classList.add("active");
-  if(t.dataset.view==="overview") loadOverview();
-  if(t.dataset.view==="records") loadRecords();
-  if(t.dataset.view==="global") loadGlobal();
-  if(t.dataset.view==="groups") loadGroups();
+  document.getElementById("view-" + t.dataset.view).classList.add("active");
+  if (t.dataset.view === "overview") loadOverview();
+  if (t.dataset.view === "records") loadRecords();
+  if (t.dataset.view === "global") loadGlobal();
+  if (t.dataset.view === "groups") loadGroups();
 });
 
-const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const sw=(id,v)=>`<label class="switch"><input type="checkbox" id="${id}" ${v?"checked":""}><span class="slider"></span></label>`;
-const val=id=>document.getElementById(id).checked;
-const sval=id=>document.getElementById(id).value;
-const segVal=id=>document.querySelector("#"+id+" button.sel").dataset.v;
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const amp = s => String(s == null ? "" : s).replace(/["\\]/g, c => ({"\\": "\\\\", '"': "\\\""}[c]));
+const sw = (id, v) => `<label class="switch"><input type="checkbox" id="${id}" ${v ? "checked" : ""}><span class="slider"></span></label>`;
+const val = id => document.getElementById(id).checked;
+const sval = id => document.getElementById(id).value;
+const segVal = id => document.querySelector("#" + id + " button.sel").dataset.v;
 
-function winnersTable(rows){
-  if(!rows.length) return `<div class="empty">暂无中奖记录</div>`;
-  return `<table><thead><tr><th>时间</th><th>群</th><th>中奖者</th><th>等次</th></tr></thead><tbody>`+
-    rows.map(r=>`<tr><td>${r.time_str}</td><td>${r.group_id}</td>
-      <td class="win-name">${esc(r.name||r.uid)}</td><td><span class="badge prize">${esc(r.prize)}</span></td></tr>`)
-    .join("")+`</tbody></table>`;
+const FAIL = e => `<div class="empty">😵 加载失败：${esc(e)}</div>`;
+
+function winnersTable(rows) {
+  if (!rows || !rows.length) return `<div class="empty">暂无中奖记录</div>`;
+  return `<table><thead><tr><th>时间</th><th>群</th><th>中奖者</th><th>等次</th></tr></thead><tbody>` +
+    rows.map(r => `<tr><td>${esc(r.time_str)}</td><td>${esc(r.group_id)}</td>
+      <td class="win-name">${esc(r.name || r.uid)}</td><td><span class="badge prize">${esc(r.prize)}</span></td></tr>`)
+      .join("") + `</tbody></table>`;
 }
 
-async function loadOverview(){
-  try{
-    const r=await apiGet(`${P}/overview`);
-    const s=(r&&r.data&&r.data.stats)||{};
-    const cards=[["🎯","启用群",s.enabled_groups],["📅","定时群",s.scheduled_groups],
-      ["👥","观测成员",s.members],["🎲","开奖次数",s.draws],["🏆","中奖人次",s.winners],["💬","总群数",s.groups]];
-    document.getElementById("stat-cards").innerHTML=cards.map(([ic,l,n])=>
-      `<div class="stat"><div class="ic">${ic}</div><div class="n">${n==null?0:n}</div><div class="l">${l}</div></div>`).join("");
-    document.getElementById("overview-recent").innerHTML=winnersTable((r&&r.data&&r.data.recent)||[]);
-  }catch(e){document.getElementById("overview-recent").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+async function loadOverview() {
+  try {
+    const r = await apiGet("overview");
+    if (r.status !== "ok") throw new Error(r.message || "数据获取失败");
+    const s = (r.data && r.data.stats) || {};
+    const cards = [
+      ["🎯", "启用群", s.enabled_groups], ["📅", "定时群", s.scheduled_groups],
+      ["👥", "观测成员", s.members], ["🎲", "开奖次数", s.draws],
+      ["🏆", "中奖人次", s.winners], ["💬", "总群数", s.groups],
+    ];
+    document.getElementById("stat-cards").innerHTML = cards.map(([ic, l, n]) =>
+      `<div class="stat"><div class="ic">${ic}</div><div class="n">${n == null ? 0 : n}</div><div class="l">${l}</div></div>`).join("");
+    document.getElementById("overview-recent").innerHTML = winnersTable((r.data && r.data.recent) || []);
+  } catch (e) {
+    document.getElementById("overview-recent").innerHTML = FAIL(e && e.message || e);
+  }
 }
 
-async function loadRecords(){
-  const gid=sval("rec-group").trim();
-  try{
-    const r=await apiGet(`${P}/winners`,gid?{group_id:gid,limit:300}:{limit:300});
-    document.getElementById("records").innerHTML=winnersTable((r&&r.data&&r.data.winners)||[]);
-  }catch(e){document.getElementById("records").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+async function loadRecords() {
+  const gid = sval("rec-group").trim();
+  try {
+    const r = await apiGet("winners", gid ? { group_id: gid, limit: 300 } : { limit: 300 });
+    if (r.status !== "ok") throw new Error(r.message || "数据获取失败");
+    document.getElementById("records").innerHTML = winnersTable((r.data && r.data.winners) || []);
+  } catch (e) {
+    document.getElementById("records").innerHTML = FAIL(e && e.message || e);
+  }
 }
-document.getElementById("rec-reload").onclick=loadRecords;
+document.getElementById("rec-reload").onclick = loadRecords;
+document.getElementById("rec-group").addEventListener("keydown", e => { if (e.key === "Enter") loadRecords(); });
 
-async function loadGlobal(){
-  try{
-    const r=await apiGet(`${P}/global`);
-    const c=(r&&r.data)||{};
-    document.getElementById("global-form").innerHTML=`
+async function loadGlobal() {
+  try {
+    const r = await apiGet("global");
+    if (r.status !== "ok") throw new Error(r.message || "数据获取失败");
+    const c = r.data || {};
+    document.getElementById("global-form").innerHTML = `
       <div class="row"><label>群启用模式</label><div class="ctrl"><div class="seg" id="g-mode">
-        ${[["blacklist","黑名单(默认全开)"],["whitelist","白名单(仅列出)"]].map(([k,v])=>
-          `<button data-v="${k}" class="${c.enabled_groups_mode===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
-      <div class="row"><label>群白名单</label><div class="ctrl"><input type="text" id="g-wl" value="${esc((c.group_whitelist||[]).join(","))}">
+        ${[["blacklist", "黑名单(默认全开)"], ["whitelist", "白名单(仅列出)"]].map(([k, v]) =>
+            `<button data-v="${k}" class="${c.enabled_groups_mode === k ? "sel" : ""}">${v}</button>`).join("")}</div></div></div>
+      <div class="row"><label>群白名单</label><div class="ctrl"><input type="text" id="g-wl" value="${esc((c.group_whitelist || []).join(","))}">
         <div class="hint">群号，英文逗号分隔</div></div></div>
-      <div class="row"><label>群黑名单</label><div class="ctrl"><input type="text" id="g-bl" value="${esc((c.group_blacklist||[]).join(",""))}">
+      <div class="row"><label>群黑名单</label><div class="ctrl"><input type="text" id="g-bl" value="${esc((c.group_blacklist || []).join(","))}">
         <div class="hint">群号，英文逗号分隔</div></div></div>
-      <div class="row"><label>额外管理员</label><div class="ctrl"><input type="text" id="g-admins" value="${esc((c.admins||[]).join(","))}">
+      <div class="row"><label>额外管理员</label><div class="ctrl"><input type="text" id="g-admins" value="${esc((c.admins || []).join(","))}">
         <div class="hint">用户号，逗号分隔（群主/群管已自动有权限）</div></div></div>
-      <div class="row"><label>联系方式</label><div class="ctrl"><input type="text" id="g-contact" value="${esc(c.contact||"")}">
-        <div class="hint">模板中 &lt;contact&gt; 替换内容</div></div></div>
-      <div class="row"><label>默认中奖模板</label><div class="ctrl"><textarea id="g-tpl">${esc(c.default_template||"")}</textarea></div></div>
-      <div class="row"><label>默认卡片</label><div class="ctrl" style="flex:0">${sw("g-card",c.card_enabled)}</div></div>
-      <div class="row"><label>默认@中奖者</label><div class="ctrl" style="flex:0">${sw("g-at",c.at_enabled)}</div></div>
+      <div class="row"><label>联系方式</label><div class="ctrl"><input type="text" id="g-contact" value="${esc(c.contact || "")}">
+        <div class="hint">追加在模板末尾的联系方式（模板含 &lt;contact&gt; 时替换）</div></div></div>
+      <div class="row"><label>默认中奖模板</label><div class="ctrl"><textarea id="g-tpl">${esc(c.default_template || "")}</textarea>
+        <div class="hint">占位符 &lt;winners&gt; &lt;count&gt; &lt;group&gt; &lt;time&gt; &lt;contact&gt;</div></div></div>
+      <div class="row"><label>默认卡片</label><div class="ctrl" style="flex:0">${sw("g-card", c.card_enabled)}</div></div>
+      <div class="row"><label>默认@中奖者</label><div class="ctrl" style="flex:0">${sw("g-at", c.at_enabled)}</div></div>
       <div class="row"><label>新群默认模式</label><div class="ctrl"><div class="seg" id="g-defmode">
-        ${[["equal","全员等权"],["activity","活跃度加权"],["signup","报名参与"]].map(([k,v])=>
-          `<button data-v="${k}" class="${c.default_mode===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
-      <div class="row"><label>每日消息上限</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-cap" value="${c.daily_msg_cap??30}"></div></div>
-      <div class="row"><label>最小间隔(秒)</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-gap" value="${c.msg_min_gap_seconds??5}"></div></div>
-      <div class="row"><label>数据保留(天)</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-ret" value="${c.data_retention_days??60}"></div></div>
+        ${[["equal", "全员等权"], ["activity", "活跃度加权"], ["signup", "报名参与"]].map(([k, v]) =>
+            `<button data-v="${k}" class="${c.default_mode === k ? "sel" : ""}">${v}</button>`).join("")}</div></div></div>
+      <div class="row"><label>每日消息上限</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-cap" value="${c.daily_msg_cap ?? 30}"></div></div>
+      <div class="row"><label>最小间隔(秒)</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-gap" value="${c.msg_min_gap_seconds ?? 5}"></div></div>
+      <div class="row"><label>数据保留(天)</label><div class="ctrl" style="flex:0 0 180px"><input type="number" id="g-ret" value="${c.data_retention_days ?? 60}"></div></div>
       <div class="btns"><button class="btn-primary" id="g-save">💾 保存全局配置</button></div>`;
-    document.querySelectorAll("#g-mode button,#g-defmode button").forEach(b=>b.onclick=()=>{
-      const parent=b.parentElement;parent.querySelectorAll("button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");});
-    document.getElementById("g-save").onclick=saveGlobal;
-  }catch(e){document.getElementById("global-form").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+    document.querySelectorAll("#g-mode button,#g-defmode button").forEach(b => b.onclick = () => {
+      const parent = b.parentElement;
+      parent.querySelectorAll("button").forEach(x => x.classList.remove("sel"));
+      b.classList.add("sel");
+    });
+    document.getElementById("g-save").onclick = saveGlobal;
+  } catch (e) {
+    document.getElementById("global-form").innerHTML = FAIL(e && e.message || e);
+  }
 }
 
-function listCsv(s){return s.split(/[,，]/).map(x=>x.trim()).filter(Boolean);}
-async function saveGlobal(){
-  const patch={
-    enabled_groups_mode:segVal("g-mode"),
-    group_whitelist:listCsv(sval("g-wl")),
-    group_blacklist:listCsv(sval("g-bl")),
-    admins:listCsv(sval("g-admins")),
-    contact:sval("g-contact"),
-    default_template:sval("g-tpl"),
-    card_enabled:val("g-card"),
-    at_enabled:val("g-at"),
-    default_mode:segVal("g-defmode"),
-    daily_msg_cap:parseInt(sval("g-cap"),10)||30,
-    msg_min_gap_seconds:parseInt(sval("g-gap"),10)||5,
-    data_retention_days:parseInt(sval("g-ret"),10)||60,
+function listCsv(s) { return s.split(/[,，]/).map(x => x.trim()).filter(Boolean); }
+
+async function saveGlobal() {
+  const patch = {
+    enabled_groups_mode: segVal("g-mode"),
+    group_whitelist: listCsv(sval("g-wl")),
+    group_blacklist: listCsv(sval("g-bl")),
+    admins: listCsv(sval("g-admins")),
+    contact: sval("g-contact"),
+    default_template: sval("g-tpl"),
+    card_enabled: val("g-card"),
+    at_enabled: val("g-at"),
+    default_mode: segVal("g-defmode"),
+    daily_msg_cap: parseInt(sval("g-cap"), 10) || 30,
+    msg_min_gap_seconds: parseInt(sval("g-gap"), 10) || 5,
+    data_retention_days: parseInt(sval("g-ret"), 10) || 60,
   };
-  try{
-    const r=await apiPost(`${P}/global`,{patch});
-    toast(r&&r.status==="ok"?"✅ 全局配置已保存":"❌ "+((r&&r.message)||"失败"));
-  }catch(e){toast("❌ "+e);}
+  const r = await apiPost("global", { patch: st });
+  toast(r.status === "ok" ? "✅ 全局配置已保存" : "❌ " + (r.message || "失败"));
 }
 
-async function loadGroups(){
-  try{
-    const r=await apiGet(`${P}/groups`);
-    groups=(r&&r.data&&r.data.groups)||[];
-    document.getElementById("groups").innerHTML=groups.length?groups.map(g=>
-      `<div class="gitem ${g.umo===curUmo?"active":""}" data-umo="${esc(g.umo)}">
-        <div class="gid">群 ${esc(g.group_id)}<span class="badge ${g.enabled?"on":"off"}">${g.enabled?"启用":"停用"}</span></div>
+async function loadGroups() {
+  try {
+    const r = await apiGet("groups");
+    if (r.status !== "ok") throw new Error(r.message || "数据获取失败");
+    groups = (r.data && r.data.groups) || [];
+    document.getElementById("groups").innerHTML = groups.length ? groups.map(g =>
+      `<div class="gitem ${g.umo === curUmo ? "active" : ""}" data-umo="${esc(g.umo)}">
+        <div class="gid">群 ${esc(g.umo.split(":")[2] || g.group_id)}<span class="badge ${g.enabled ? "on" : "off"}">${g.enabled ? "启用" : "停用"}</span></div>
         <div class="meta">${g.member_observed} 成员 · ${esc(g.schedule_desc)}</div></div>`).join("")
-      :`<div class="empty">还没有群。机器人入群发言，<br>或管理员发送「抽奖 启用」。</div>`;
-    document.querySelectorAll(".gitem").forEach(it=>it.onclick=()=>selectGroup(it.dataset.umo));
-  }catch(e){document.getElementById("groups").innerHTML=`<div class="empty">加载失败：${e}</div>`;}
+      : `<div class="empty">还没有群。机器人入群发言，<br>或管理员发送「抽奖 启用」。</div>`;
+    document.querySelectorAll(".gitem").forEach(it => it.onclick = () => selectGroup(it.dataset.umo));
+  } catch (e) {
+    document.getElementById("groups").innerHTML = FAIL(e && e.message || e);
+  }
 }
 
-async function selectGroup(umo){
-  curUmo=umo; loadGroups();
-  const r=await apiGet(`${P}/config/${encodeURIComponent(umo)}`);
-  cur=r&&r.data; if(!cur){toast("配置加载失败");return;}
+async function selectGroup(umo) {
+  curUmo = umo;
+  document.querySelectorAll(".gitem").forEach(it => it.classList.toggle("active", it.dataset.umo === umo));
+  const r = await apiGet("config/" + umo);   // 桥接/直连分别负责各自 URL 转义
+  if (r.status !== "ok" || !r.data) { toast("配置加载失败：" + (r.message || "未知错误")); return; }
+  cur = r.data;
   renderDetail();
 }
 
-function renderDetail(){
-  const c=cur;
-  document.getElementById("detail-title").textContent=`群 ${c.group_id} 配置`;
-  const modes=[["equal","全员等权"],["activity","活跃度加权"],["signup","报名参与"]];
-  const st=[["none","关闭"],["daily","每日"],["weekly","每周"],["biweekly","每两周"],["monthly","每月"],["custom","cron"]];
-  document.getElementById("detail").innerHTML=`
-    <div class="row"><label>启用本群抽奖</label><div class="ctrl" style="flex:0">${sw("f-enabled",c.enabled)}</div></div>
+function renderDetail() {
+  const c = cur;
+  const groupId = c.group_id || (c.umo || "").split(":")[2] || "";
+  document.getElementById("detail-title").textContent = `群 ${groupId} 配置`;
+  const modes = [["equal", "全部等权"], ["activity", "活跃度加权"], ["signup", "报名参与"]];
+  const st = [["none", "关闭"], ["daily", "每日"], ["weekly", "每周"], ["biweekly", "每两周"], ["monthly", "每月"], ["custom", "cron"]];
+  document.getElementById("detail").innerHTML = `
+    <div class="row"><label>启用本群抽奖</label><div class="ctrl" style="flex:0">${sw("f-enabled", c.enabled)}</div></div>
     <div class="section-title">参与与中奖</div>
     <div class="row"><label>参与模式</label><div class="ctrl"><div class="seg" id="f-mode">
-      ${modes.map(([k,v])=>`<button data-v="${k}" class="${c.mode===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
+      ${modes.map(([k, v]) => `<button data-v="${k}" class="${c.mode === k ? "sel" : ""}">${v}</button>`).join("")}</div></div></div>
     <div class="row"><label>中奖等次名额</label><div class="ctrl"><input type="text" id="f-prizes"
-      value="${esc(c.prizes.map(p=>p.name+":"+p.count).join(","))}"><div class="hint">一等奖:1,二等奖:2</div></div></div>
+      value="${esc(c.prizes.map(p => p.name + ":" + p.count).join(","))}"><div class="hint">一等奖:1,二等奖:2</div></div></div>
     <div class="row"><label>防连中冷却(天)</label><div class="ctrl" style="flex:0 0 160px">
       <input type="number" id="f-cooldown" value="${c.cooldown_days}" min="0"></div></div>
-    <div class="row"><label>排除管理员</label><div class="ctrl" style="flex:0">${sw("f-exadmins",c.exclude_admins)}</div></div>
+    <div class="row"><label>排除管理员</label><div class="ctrl" style="flex:0">${sw("f-exadmins", c.exclude_admins)}</div></div>
     <div class="section-title">活跃度加权</div>
     <div class="row"><label>统计窗口(天)</label><div class="ctrl" style="flex:0 0 160px"><input type="number" id="f-window" value="${c.activity_window_days}"></div></div>
     <div class="row"><label>最低发言条数</label><div class="ctrl" style="flex:0 0 160px"><input type="number" id="f-mincount" value="${c.activity_min_count}"></div></div>
     <div class="section-title">通知与卡片</div>
-    <div class="row"><label>@中奖者</label><div class="ctrl" style="flex:0">${sw("f-at",c.at_winners)}</div></div>
-    <div class="row"><label>开奖卡片</label><div class="ctrl" style="flex:0">${sw("f-card",c.card_enabled)}</div></div>
-    <div class="row"><label>中奖模板</label><div class="ctrl"><textarea id="f-template">${esc(c.template||"")}</textarea>
+    <div class="row"><label>@中奖者</label><div class="ctrl" style="flex:0">${sw("f-at", c.at_winners)}</div></div>
+    <div class="row"><label>开奖卡片</label><div class="ctrl" style="flex:0">${sw("f-card", c.card_enabled)}</div></div>
+    <div class="row"><label>中奖模板</label><div class="ctrl"><textarea id="f-template">${esc(c.template || "")}</textarea>
       <div class="hint">占位符 &lt;winners&gt; &lt;count&gt; &lt;group&gt; &lt;time&gt; &lt;contact&gt;</div></div></div>
     <div class="section-title">定时开奖</div>
     <div class="row"><label>定时类型</label><div class="ctrl"><div class="seg" id="f-st">
-      ${st.map(([k,v])=>`<button data-v="${k}" class="${c.schedule.type===k?"sel":""}">${v}</button>`).join("")}</div></div></div>
-    <div class="row"><label>时间(HH:MM)</label><div class="ctrl" style="flex:0 0 160px"><input type="text" id="f-time" value="${esc(c.schedule.time||"20:00")}"></div></div>
+      ${st.map(([k, v]) => `<button data-v="${k}" class="${c.schedule.type === k ? "sel" : ""}">${v}</button>`).join("")}</div></div></div>
+    <div class="row"><label>时间(HH:MM)</label><div class="ctrl" style="flex:0 0 160px"><input type="text" id="f-time" value="${esc(c.schedule.time || "20:00")}"></div></div>
     <div class="row" id="row-wd" style="display:none"><label>星期</label><div class="ctrl" style="flex:0 0 160px">
-      <select id="f-wd">${["周一","周二","周三","周四","周五","周六","周日"].map((w,i)=>
-        `<option value="${i}" ${c.schedule.weekday===i?"selected":""}>${w}</option>`).join("")}</select></div></div>
+      <select id="f-wd">${["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map((w, i) =>
+        `<option value="${i}" ${c.schedule.weekday === i ? "selected" : ""}>${w}</option>`).join("")}</select></div></div>
     <div class="row" id="row-md" style="display:none"><label>每月日期</label><div class="ctrl" style="flex:0 0 160px">
-      <input type="number" id="f-md" value="${c.schedule.monthday||1}" min="1" max="28"></div></div>
+      <input type="number" id="f-md" value="${c.schedule.monthday || 1}" min="1" max="28"></div></div>
     <div class="row" id="row-cron" style="display:none"><label>cron</label><div class="ctrl">
-      <input type="text" id="f-cron" value="${esc(c.schedule.cron||"")}" placeholder="0 20 * * 5">
+      <input type="text" id="f-cron" value="${esc(c.schedule.cron || "")}" placeholder="0 20 * * 5">
       <div class="hint">5 段：分 时 日 月 周</div></div></div>
-    <div class="next" id="f-next">${(c.next_fires||[]).map(x=>"· "+x).join("<br>")}</div>
+    <div class="next" id="f-next">${(c.next_fires || []).map(x => "· " + x).join("<br>")}</div>
     <div class="btns">
       <button class="btn-primary" id="btn-save">💾 保存</button>
       <button class="btn-ghost" id="btn-refresh">🔄 刷新</button>
       <button class="btn-ghost" id="btn-draw">🎲 立即开奖</button>
     </div>`;
-  document.querySelectorAll("#f-mode button,#f-st button").forEach(b=>b.onclick=()=>{
-    b.parentElement.querySelectorAll("button").forEach(x=>x.classList.remove("sel"));b.classList.add("sel");
-    if(b.parentElement.id==="f-st") syncSched();});
-  const syncSched=()=>{const t=segVal("f-st");
-    document.getElementById("row-wd").style.display=(t==="weekly"||t==="biweekly")?"flex":"none";
-    document.getElementById("row-md").style.display=(t==="monthly")?"flex":"none";
-    document.getElementById("row-cron").style.display=(t==="custom")?"flex":"none";};
+  document.querySelectorAll("#f-mode button,#f-st button").forEach(b => b.onclick = () => {
+    const parent = b.parentElement;
+    parent.querySelectorAll("button").forEach(x => x.classList.remove("sel"));
+    b.classList.add("sel");
+    if (b.parentElement.id === "f-st") syncSched();
+  });
+  const syncSched = () => {
+    const t = segVal("f-st");
+    document.getElementById("row-wd").style.display = (t === "weekly" || t === "biweekly") ? "flex" : "none";
+    document.getElementById("row-md").style.display = (t === "monthly") ? "flex" : "none";
+    document.getElementById("row-cron").style.display = (t === "custom") ? "flex" : "none";
+  };
   syncSched();
-  document.getElementById("btn-save").onclick=save;
-  document.getElementById("btn-refresh").onclick=()=>selectGroup(curUmo);
-  document.getElementById("btn-draw").onclick=doDraw;
+  document.getElementById("btn-save").onclick = saveDetail;
+  document.getElementById("btn-refresh").onclick = () => selectGroup(curUmo);
+  document.getElementById("btn-draw").onclick = doDraw;
 }
 
-function readSched(){const t=segVal("f-st");const s={type:t,time:sval("f-time"),weekday:0,monthday:1,cron:""};
-  if(t==="weekly"||t==="biweekly")s.weekday=parseInt(sval("f-wd"),10);
-  if(t==="monthly")s.monthday=parseInt(sval("f-md"),10);
-  if(t==="custom")s.cron=sval("f-cron").trim();return s;}
-
-async function save(){
-  const patch={enabled:val("f-enabled"),mode:segVal("f-mode"),prizes:sval("f-prizes").trim(),
-    cooldown_days:parseInt(sval("f-cooldown"),10)||0,exclude_admins:val("f-exadmins"),
-    activity_window_days:parseInt(sval("f-window"),10)||7,activity_min_count:parseInt(sval("f-mincount"),10)||0,
-    at_winners:val("f-at"),card_enabled:val("f-card"),template:sval("f-template"),schedule:readSched()};
-  try{
-    const r=await apiPost(`${P}/config`,{umo:curUmo,patch});
-    if(r&&r.status==="ok"){toast("✅ 已保存");cur=r.data;renderDetail();loadGroups();}
-    else toast("❌ "+((r&&r.message)||"保存失败"));
-  }catch(e){toast("❌ "+e);}
-}
-async function doDraw(){
-  if(!confirm("确定立即开奖？会真实发送开奖消息并记录中奖。"))return;
-  try{const r=await apiPost(`${P}/draw`,{umo:curUmo});
-    toast(r&&r.status==="ok"?"🎲 开奖指令已执行":"❌ "+((r&&r.message)||"失败"));}
-  catch(e){toast("❌ "+e);}
+function readSched() {
+  const t = segVal("f-st");
+  const s = { type: t, time: sval("f-time"), weekday: 0, monthday: 1, cron: "" };
+  if (t === "weekly" || t === "biweekly") s.weekday = parseInt(sval("f-wd"), 10) || 0;
+  if (t === "monthly") s.monthday = parseInt(sval("f-md"), 10) || 1;
+  if (t === "custom") s.cron = sval("f-cron").trim();
+  return s;
 }
 
-window.AstrBotPluginPage.ready().then(loadOverview);
+async function saveDetail() {
+  const patch = {
+    enabled: val("f-enabled"), mode: segVal("f-mode"), prizes: sval("f-prizes").trim(),
+    cooldown_days: parseInt(sval("f-cooldown"), 10) || 0, exclude_admins: val("f-exadmins"),
+    activity_window_days: parseInt(sval("f-window"), 10) || 7, activity_min_count: parseInt(sval("f-mincount"), 10) || 0,
+    at_winners: val("f-at"), card_enabled: val("f-card"), template: sval("f-template"), schedule: readSched(),
+  };
+  const r = await apiPost("config", { umo: curUmo, patch: patch });
+  if (r.status === "ok") {
+    toast("✅ 已保存");
+    cur = r.data;
+    renderDetail();
+    loadGroups();
+  } else {
+    toast("❌ " + (r.message || "保存失败"));
+  }
+}
+
+async function doDraw() {
+  if (!confirm("确定立即开奖？会真实发送开奖消息并记录中奖。")) return;
+  const r = await apiPost("draw", { umo: curUmo });
+  toast(r.status === "ok" ? "🎲 开奖指令已执行" : "❌ " + (r.message || "失败"));
+}
+
+/* ---------- 启动 ----------
+ * 在仪表盘嵌入页等待桥接就绪；若桥接缺失（独立打开）或超时，立即回退直连加载，避免一直「加载中」。 */
+async function bootstrap() {
+  if (USE_BRIDGE) {
+    try {
+      if (BRIDGE && typeof BRIDGE.ready === "function") {
+        await Promise.race([BRIDGE.ready(), new Promise(res => setTimeout(res, 3000))]);
+      }
+    } catch (e) { /* 桥接异常则继续直连 */ }
+  }
+  const modeEl = document.querySelector(".topbar .mode");
+  if (modeEl) modeEl.textContent = USE_BRIDGE ? "嵌入模式" : "独立模式";
+  loadOverview();
+  loadGroups();
+}
+
+bootstrap();
 </script>
 </body>
 </html>

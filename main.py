@@ -163,7 +163,7 @@ class GroupRafflePlugin(Star):
             ctx.register_web_api(
                 f"/{p}/groups", api.list_groups, ["GET"], "列出所有群")
             ctx.register_web_api(
-                f"/{p}/config/{{group_id}}", api.get_config, ["GET"], "获取单群配置")
+                f"/{p}/config/<group_id>", api.get_config, ["GET"], "获取单群配置")
             ctx.register_web_api(
                 f"/{p}/config", api.update_config, ["POST"], "更新单群配置")
             ctx.register_web_api(
@@ -257,21 +257,30 @@ class GroupRafflePlugin(Star):
             logger.debug(f"[GroupRaffle] 活跃度记录失败: {e}")
 
     # ---------------- 命令入口（指令组） ----------------
+    #
+    # AstrBot 对指令组只会「按子指令精确匹配后直接调用该子指令 handler」，
+    # 指令组的父级方法（cmd_raffle）本身不会被调用，仅用于生成指令树 / 行为管理列表。
+    # 因此把所有业务逻辑收敛到一个统一的 _dispatch_sub(event) 内部，子指令 handler
+    # 只是「被 AstrBot 唤醒」的入口，再委托给 _dispatch_sub，避免逻辑重复。
+    # 这样行为管理中可对每个子指令单独启停，README 中「管理员 / 所有人」权限也统一落实。
 
-    # 指令组「抽奖」（别名 raffle）。父组方法接收所有「抽奖 xxx」并内部分发；
-    # 下面的子指令 dummy 仅用于在指令树 / 行为管理中列出各子指令（中文显示）。
     @filter.command_group("抽奖", alias={"raffle"})
     async def cmd_raffle(self, event):
-        text = (event.message_str or "").strip()
-        parts = text.split()
-        if parts and parts[0].lstrip("/").lower() in ("抽奖", "raffle"):
+        """主指令组「抽奖」（别名 raffle）。仅发送「抽奖」时框架会提示指令列表。"""
+        async for r in self._dispatch_command(event):
+            yield r
+
+    def _command_tokens(self, event) -> list[str]:
+        """把完整消息还原成去掉引导词（/抽奖、/raffle）后的参数列表。"""
+        parts = (event.message_str or "").strip().split()
+        while parts and parts[0].lstrip("/").lower() in ("抽奖", "raffle"):
             parts = parts[1:]
-        # 兼容带唤醒前缀的形式（如 /抽奖、/raffle）
-        if parts:
-            first = parts[0].lstrip("/")
-            if first in ("抽奖", "raffle"):
-                parts = parts[1:]
-        sub = parts[0] if parts else "help"
+        return parts
+
+    async def _dispatch_command(self, event):
+        """统一派发：解析子命令 → 帮助/启用等特殊分支 → 权限检查 → 执行子命令。"""
+        parts = self._command_tokens(event)
+        sub = parts[0] if parts else "帮助"
         args = parts[1:] if len(parts) > 1 else []
 
         umo = event.unified_msg_origin
@@ -282,7 +291,7 @@ class GroupRafflePlugin(Star):
             return
 
         # 无需群启用即可用的命令：帮助、启用
-        if sub in ("help", "帮助", ""):
+        if sub in ("帮助", "help", ""):
             async for r in self._yield_help(event):
                 yield r
             return
@@ -296,12 +305,13 @@ class GroupRafflePlugin(Star):
             yield event.plain_result("✅ 本群抽奖已启用。")
             return
 
-        if not self._group_enabled(umo) and sub not in ("停用",):
+        if not self._group_enabled(umo) and sub not in ("停用", "off"):
             yield event.plain_result("本群抽奖未启用（管理员发送「抽奖 启用」开启）。")
             return
 
         handler = {
             "停用": self._h_disable,
+            "off": self._h_disable,
             "状态": self._h_status,
             "报名": self._h_join,
             "join": self._h_join,
@@ -331,8 +341,9 @@ class GroupRafflePlugin(Star):
             yield event.plain_result(f"未知子命令：{sub}\n发送「抽奖 帮助」查看用法。")
             return
 
-        admin_only = sub not in ("状态", "报名", "join", "取消报名", "quit", "名单", "定时预览")
-        if admin_only and not self._is_admin(event):
+        # README 权限：状态 / 报名 / 取消报名 / 名单 / 定时预览 对所有人开放，其余默认仅管理员
+        everyone = {"状态", "报名", "join", "取消报名", "quit", "名单", "定时预览"}
+        if sub not in everyone and not self._is_admin(event):
             yield event.plain_result("仅群主/管理员可执行该操作。")
             return
 
@@ -350,84 +361,129 @@ class GroupRafflePlugin(Star):
             logger.error(f"[GroupRaffle] 命令执行失败: {e}")
             yield event.plain_result(f"⚠️ 执行失败：{e}")
 
-    # ---- 子指令注册（仅用于指令树/行为管理展示，运行时由 cmd_raffle 统一分发）----
-    # 这些方法体不会被调用：指令组子指令在 waking 阶段不进入 activated_handlers。
+    # ---- 子指令真实 handler ----
+    # 每个子指令都由 AstrBot 直接派发，再统一委托给 _dispatch_command，
+    # 这里只接收 event（args 在 _dispatch_command 里从 message_str 重新解析），
+    # 从而保留「子命令可跟不定长参数」的能力（模板 / 定时 / 等次 等自由文本）。
 
-    @cmd_raffle.command("帮助")
-    async def _sub_help(self, event):
-        return
+    @cmd_raffle.command("帮助", alias={"help"})
+    async def _sub_help(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("状态")
-    async def _sub_status(self, event):
-        return
+    @cmd_raffle.command("状态", alias={"status"})
+    async def _sub_status(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("报名")
-    async def _sub_join(self, event):
-        return
+    @cmd_raffle.command("报名", alias={"signup", "join"})
+    async def _sub_join(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("取消报名")
-    async def _sub_quit(self, event):
-        return
+    @cmd_raffle.command("取消报名", alias={"quit"})
+    async def _sub_quit(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("名单")
-    async def _sub_list(self, event):
-        return
+    @cmd_raffle.command("名单", alias={"list"})
+    async def _sub_list(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("启用")
-    async def _sub_enable(self, event):
-        return
+    @cmd_raffle.command("启用", alias={"on"})
+    async def _sub_enable(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("停用")
-    async def _sub_disable(self, event):
-        return
+    @cmd_raffle.command("停用", alias={"off"})
+    async def _sub_disable(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("开奖")
-    async def _sub_draw(self, event, count: str = ""):
-        return
+    @cmd_raffle.command("开奖", alias={"draw"})
+    async def _sub_draw(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("模拟")
-    async def _sub_simulate(self, event, count: str = "", rounds: str = ""):
-        return
+    @cmd_raffle.command("模拟", alias={"simulate", "测试", "test"})
+    async def _sub_simulate(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("模式")
-    async def _sub_mode(self, event, mode: str = ""):
-        return
+    @cmd_raffle.command("模式", alias={"mode"})
+    async def _sub_mode(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("等次")
-    async def _sub_prizes(self, event, prizes: str = ""):
-        return
+    @cmd_raffle.command("等次", alias={"prizes"})
+    async def _sub_prizes(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("冷却")
-    async def _sub_cooldown(self, event, days: str = ""):
-        return
+    @cmd_raffle.command("冷却", alias={"cooldown"})
+    async def _sub_cooldown(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("排除管理员")
-    async def _sub_exadmins(self, event, onoff: str = ""):
-        return
+    @cmd_raffle.command("排除管理员", alias={"exclude"})
+    async def _sub_exadmins(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
     @cmd_raffle.command("艾特", alias={"at"})
-    async def _sub_at(self, event, onoff: str = ""):
-        return
+    async def _sub_at(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("卡片")
-    async def _sub_card(self, event, onoff: str = ""):
-        return
+    @cmd_raffle.command("卡片", alias={"card"})
+    async def _sub_card(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("模板")
-    async def _sub_template(self, event, text: str = ""):
-        return
+    @cmd_raffle.command("模板", alias={"template"})
+    async def _sub_template(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("窗口")
-    async def _sub_window(self, event, days: str = ""):
-        return
+    @cmd_raffle.command("窗口", alias={"window"})
+    async def _sub_window(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("定时")
-    async def _sub_schedule(self, event, *args):
-        return
+    @cmd_raffle.command("定时", alias={"schedule"})
+    async def _sub_schedule(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
 
-    @cmd_raffle.command("定时预览")
-    async def _sub_sched_preview(self, event):
-        return
+    @cmd_raffle.command("定时预览", alias={"sched_preview"})
+    async def _sub_sched_preview(self, e):
+        async for r in self._dispatch_command(e):
+            yield r
+
+    # ---- 未识别子命令的兜底 ----
+    # 指令组只会精确匹配已注册子指令；遇到「抽奖 xxx」这类未知子命令时，
+    # 用一个低优先级正则 handler 给出友好提示（已被子指令命中的消息本方法返回空，
+    # 不会与子指令重复响应）。
+    @filter.regex(r"^(?:抽奖|raffle)\s+\S+")
+    async def _unknown_sub(self, event):
+        parts = self._command_tokens(event)
+        if not parts:
+            return
+        sub = parts[0].lstrip("/")
+        known = {
+            "管理", "help", "帮助", "状态", "status",
+            "报名", "signup", "join", "取消报名", "quit",
+            "名单", "list", "启用", "on", "停用", "off",
+            "开奖", "draw", "模拟", "simulate", "测试", "test",
+            "模式", "mode", "等次", "prizes", "冷却", "cooldown",
+            "排除管理员", "exclude", "艾特", "at", "卡片", "card",
+            "模板", "template", "窗口", "window", "定时", "schedule",
+            "定时预览", "sched_preview",
+        }
+        if sub in known:
+            return
+        yield event.plain_result(f"未知子命令：{sub}\n发送「抽奖 帮助」查看全部命令。")
 
     # ---------------- 子命令处理 ----------------
 
@@ -641,7 +697,10 @@ class GroupRafflePlugin(Star):
                 raise ValueError("cron 必须是 5 段：分 时 日 月 周，例如 0 20 * * 5")
             sched.update(type=SCHED_CUSTOM, cron=cron)
             # 先校验能否构造 trigger
-            from .scheduler import build_trigger
+            try:
+                from .scheduler import build_trigger
+            except ImportError:  # 平铺加载
+                from scheduler import build_trigger  # type: ignore
 
             build_trigger(sched)
         else:

@@ -231,7 +231,7 @@ class SettingsStore:
         self.global_card_enabled = bool(global_config.get("card_enabled", False))
         self.global_template = global_config.get(
             "default_template",
-            "🎉 恭喜 <winners> 中奖！<contact>",
+            "🎉 恭喜 <winners> 中奖！请尽快联系群主/管理员领取奖品。",
         )
 
     def get(self, umo: str) -> GroupSettings:
