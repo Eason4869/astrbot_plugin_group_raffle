@@ -122,7 +122,7 @@ def _fallback_help_text() -> str:
     "astrbot_plugin_group_raffle",
     "Eason4869",
     "群抽奖助手 GroupRaffle：分群配置/定时/活跃度加权/报名/多等次/@/卡片",
-    "0.3.1-beta",
+    "0.3.2-beta",
 )
 class GroupRafflePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -304,7 +304,7 @@ class GroupRafflePlugin(Star):
             yield event.plain_result(f"抽奖插件初始化失败：{e}")
             return
 
-        # 无需群启用即可用的命令：帮助、启用
+        # 无需群启用即可用的命令：帮助、启用、状态、名单、定时预览（信息查询类）
         if sub in ("帮助", "help", ""):
             async for r in self._yield_help(event):
                 yield r
@@ -319,7 +319,8 @@ class GroupRafflePlugin(Star):
             yield event.plain_result("✅ 本群抽奖已启用。")
             return
 
-        if not self._group_enabled(umo) and sub not in ("停用", "off"):
+        read_only = {"状态", "名单", "定时预览"}
+        if not self._group_enabled(umo) and sub not in ("停用", "off") and sub not in read_only:
             yield event.plain_result("本群抽奖未启用（管理员发送「抽奖 启用」开启）。")
             return
 
