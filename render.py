@@ -66,7 +66,7 @@ async def render_result_card(star, tier_results, group_name, when_str,
     try:
         p = await asyncio.to_thread(
             _render_pillow, tier_results, group_name, when_str, mode_label,
-            pool_size, simulate,
+            pool_size, simulate, data["notes"],
         )
         if p:
             return p
@@ -165,19 +165,30 @@ def _coerce_to_path(result) -> Optional[str]:
 
 # ---------------- Pillow 兜底（开奖卡片） ----------------
 
-def _find_cjk_font(size: int):
+def _find_cjk_font(size: int, bold: bool = False):
     from PIL import ImageFont
 
-    candidates = [
-        r"C:\Windows\Fonts\msyh.ttc",
-        r"C:\Windows\Fonts\msyhbd.ttc",
-        r"C:\Windows\Fonts\simhei.ttf",
-        r"C:\Windows\Fonts\simsun.ttc",
-        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/System/Library/Fonts/PingFang.ttc",
-    ]
+    if bold:
+        candidates = [
+            r"C:\Windows\Fonts\msyhbd.ttc",
+            r"C:\Windows\Fonts\simhei.ttf",
+            r"C:\Windows\Fonts\msyh.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/System/Library/Fonts/PingFang.ttc",
+        ]
+    else:
+        candidates = [
+            r"C:\Windows\Fonts\msyh.ttc",
+            r"C:\Windows\Fonts\msyhbd.ttc",
+            r"C:\Windows\Fonts\simhei.ttf",
+            r"C:\Windows\Fonts\simsun.ttc",
+            "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/System/Library/Fonts/PingFang.ttc",
+        ]
     for p in candidates:
         if os.path.exists(p):
             try:
@@ -203,94 +214,284 @@ def _wrap_text(draw, text, font, max_w):
     return lines or [""]
 
 
-def _render_pillow(tier_results, group_name, when_str, mode_label, pool_size,
-                   simulate: bool = False) -> Optional[str]:
-    """Pillow 绘制开奖卡片：更高分辨率(780px)保证清晰；不使用 emoji（中文字体
-    无彩色 emoji，会渲染成方框），用纯文本标题避免失效。"""
+def _grad_banner(draw_box, c_top, c_bottom, radius):
+    """生成一张竖向渐变的圆角横幅图层（RGBA）。"""
     from PIL import Image, ImageDraw
 
-    W = 780
-    px = 36                     # 左右内边距
-    ORANGE = (230, 126, 34)
-    BROWN = (61, 34, 0)
-    GOLD = (154, 106, 58)
-    BG = (255, 250, 244)
-    LINE = (245, 223, 196)
+    x0, y0, x1, y1 = draw_box
+    w = int(x1 - x0)
+    h = int(y1 - y0)
+    grad = Image.new("RGBA", (w, h), c_top + (255,))
+    px = grad.load()
+    for yy in range(h):
+        t = yy / max(h - 1, 1)
+        r = int(c_top[0] + (c_bottom[0] - c_top[0]) * t)
+        g = int(c_top[1] + (c_bottom[1] - c_top[1]) * t)
+        b = int(c_top[2] + (c_bottom[2] - c_top[2]) * t)
+        for xx in range(w):
+            px[xx, yy] = (r, g, b, 255)
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle([0, 0, w - 1, h - 1], radius=radius, fill=255)
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    out.paste(grad, (0, 0), mask)
+    return out
+
+
+def _draw_crown(d, cx, cy, color):
+    """在横幅标题上方画一个简约皇冠（纯几何图形，不依赖 emoji）。"""
+    w, h = 40, 26
+    x0, y0 = cx - w // 2, cy - h // 2
+    pts = [
+        (x0, y0 + h),          # 左下
+        (x0, y0 + 9),
+        (x0 + 10, y0 + 15),
+        (x0 + w // 2, y0),
+        (x0 + w - 10, y0 + 15),
+        (x0 + w, y0 + 9),
+        (x0 + w, y0 + h),
+    ]
+    d.polygon(pts, fill=color)
+    # 三点圆珠
+    for px_, py_ in ((x0, y0 + 9), (x0 + w // 2, y0), (x0 + w, y0 + 9)):
+        d.ellipse([px_ - 3, py_ - 3, px_ + 3, py_ + 3], fill=color)
+    d.rectangle([x0, y0 + h - 6, x0 + w, y0 + h + 1], fill=color)
+
+
+# 等次奖牌配色：金 / 银 / 铜 / 暖橙（之后循环）
+_BADGE_COLORS = [
+    ((234, 179, 8), (255, 247, 224)),    # 金
+    ((148, 158, 170), (244, 246, 248)),  # 银
+    ((184, 115, 51), (250, 238, 224)),   # 铜
+    ((230, 126, 34), (255, 243, 230)),   # 橙
+]
+
+
+def _render_pillow(tier_results, group_name, when_str, mode_label, pool_size,
+                   simulate: bool = False, notes: Optional[list] = None) -> Optional[str]:
+    """Pillow 绘制开奖卡片：暖色渐变 + 渐变横幅 + 奖牌等次 + 中奖者胶囊排版。
+
+    全程不使用 emoji（中文字体无彩色 emoji 会渲染成方框），装饰用几何图形。
+    """
+    from PIL import Image, ImageDraw
+
+    notes = list(notes or [])
+    W = 820
+    px = 44                     # 左右内边距
+    MARGIN = 24                 # 卡片外边距（给圆角/描边留位）
+
+    # ---- 配色：真实开奖=暖橙金；模拟=沉稳蓝（一眼区分） ----
+    if simulate:
+        BANNER_TOP, BANNER_BOT = (74, 111, 165), (45, 72, 120)
+        BADGE_HEAD = (74, 111, 165)
+    else:
+        BANNER_TOP, BANNER_BOT = (245, 158, 11), (214, 94, 24)
+        BADGE_HEAD = (230, 126, 34)
+    BG_TOP, BG_BOT = (255, 251, 245), (253, 244, 233)
+    INK = (61, 42, 22)
+    SUB_INK = (147, 110, 72)
+    GOLD = (193, 142, 62)
+    LINE = (240, 224, 198)
+    WHITE = (255, 255, 255)
+
     title_text = "模拟开奖（结果不记录）" if simulate else "开奖结果"
 
-    f_title = _find_cjk_font(42)
+    f_title = _find_cjk_font(44, bold=True)
     f_banner_sub = _find_cjk_font(21)
-    f_meta = _find_cjk_font(20)
-    f_prize = _find_cjk_font(25)
-    f_name = _find_cjk_font(34)
+    f_div = _find_cjk_font(20, bold=True)
+    f_prize = _find_cjk_font(27, bold=True)
+    f_name = _find_cjk_font(32, bold=True)
+    f_rank = _find_cjk_font(22, bold=True)
+    f_short = _find_cjk_font(19)
+    f_note = _find_cjk_font(18)
+    f_foot = _find_cjk_font(17)
 
-    banner_h = 136
-    banner_rad = 22
+    content_w = W - 2 * px
 
-    # ---- 预测量高 ----
-    tmp = Image.new("RGB", (W, 10), BG)
+    # ========== 预测量，计算总高 ==========
+    tmp = Image.new("RGB", (W, 10), BG_TOP)
     d0 = ImageDraw.Draw(tmp)
-    y = banner_h + 46
-    for t in tier_results:
-        names = "、".join(n for _, n in t.winners) or "—"
-        if t.shortage:
-            names += f"（缺 {t.shortage} 名）"
-        lines = _wrap_text(d0, names, f_name, W - 2 * px - 60)
-        y += 34 + len(lines) * 50 + 36
-    y += 30
-    H = y + 52
 
-    img = Image.new("RGB", (W, H), BG)
+    def text_w(s, f):
+        b = d0.textbbox((0, 0), s, font=f)
+        return b[2] - b[0]
+
+    # 先把每个等次的中奖者拆成行（胶囊布局）
+    GAP = 14           # 胶囊间距
+    CHIP_PAD = 16      # 胶囊左右内边距
+    H = 0              # 占位
+    tiers_layout = []
+    y = 0
+    for idx, t in enumerate(tier_results):
+        raw_names = "、".join(n for _, n in t.winners)
+        names = [n for _, n in t.winners]
+        # 胶囊换行排版
+        chip_ws = [text_w(n, f_name) + 2 * CHIP_PAD for n in names]
+        lines = []
+        cur = []
+        cur_w = 0
+        max_line_w = content_w - 56
+        for n, cw in zip(names, chip_ws):
+            add = cw + (GAP if cur else 0)
+            if cur and cur_w + add > max_line_w:
+                lines.append(cur)
+                cur, cur_w = [n], cw
+            else:
+                cur.append(n)
+                cur_w += add
+        if cur:
+            lines.append(cur)
+        if not names:
+            lines = []
+        tiers_layout.append((t, names, lines))
+
+    banner_h = 158
+    cursor = MARGIN + banner_h + 34          # 横幅底 → 分隔标题
+    cursor += 44                              # “中奖名单”分隔行
+    # 等次卡片
+    BLOCK_GAP = 20
+    block_heights = []
+    for t, names, lines in tiers_layout:
+        name_area_h = (len(lines) * (52 + 12)) if lines else 52
+        bh = 26 + 46 + 18 + name_area_h + 26  # 顶部留白+奖牌行+间距+名单+底部
+        block_heights.append(bh)
+        cursor += bh + BLOCK_GAP
+    cursor += 6
+    # 备注区
+    note_lines = []
+    for n in notes:
+        wrapped = _wrap_text(d0, str(n), f_note, content_w - 56)
+        note_lines.extend(wrapped)
+    notes_h = 0
+    if note_lines:
+        notes_h = 22 + len(note_lines) * 30 + 18
+        cursor += notes_h + 10
+    cursor += 24
+    foot_h = 40
+    H = cursor + foot_h
+
+    # ========== 正式绘制 ==========
+    img = Image.new("RGBA", (W, H), BG_TOP + (255,))
+    # 背景竖向暖色渐变
+    bg_grad = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    bp = bg_grad.load()
+    for yy in range(H):
+        tt = yy / max(H - 1, 1)
+        r = int(BG_TOP[0] + (BG_BOT[0] - BG_TOP[0]) * tt)
+        g = int(BG_TOP[1] + (BG_BOT[1] - BG_TOP[1]) * tt)
+        b = int(BG_TOP[2] + (BG_BOT[2] - BG_TOP[2]) * tt)
+        for xx in range(W):
+            bp[xx, yy] = (r, g, b, 255)
+    img.alpha_composite(bg_grad)
     d = ImageDraw.Draw(img)
 
-    # ---- 顶部横幅 ----
-    d.rounded_rectangle([16, 16, W - 16, 16 + banner_h], radius=banner_rad,
-                        fill=ORANGE)
-    d.rounded_rectangle([16, 16, W - 16, 16 + banner_h], radius=banner_rad,
-                        outline=(255, 200, 130), width=3)
-    tsize = d.textbbox((0, 0), title_text, font=f_title)
-    d.text(((W - (tsize[2] - tsize[0])) / 2, 30), title_text,
-           font=f_title, fill=(255, 255, 255))
-    sub = f"{group_name or '本群'} · {mode_label} · 候选 {pool_size} 人 · {when_str}"
-    ssize = d.textbbox((0, 0), sub, font=f_banner_sub)
-    d.text(((W - (ssize[2] - ssize[0])) / 2, 16 + banner_h - 46), sub,
-           font=f_banner_sub, fill=(255, 243, 230))
+    # 外描边（细金边）
+    d.rounded_rectangle([6, 6, W - 7, H - 7], radius=26, outline=(233, 209, 168), width=2)
 
-    # ---- 中奖名单分隔 ----
-    y = 16 + banner_h + 26
-    d.text(((W - d.textbbox((0, 0), "— 中奖名单 —", font=f_meta)[2]) / 2, y),
-           "— 中奖名单 —", font=f_meta, fill=GOLD)
+    # ---- 顶部渐变横幅 ----
+    bx0, bx1 = MARGIN, W - MARGIN
+    by0, by1 = MARGIN, MARGIN + banner_h
+    img.alpha_composite(
+        _grad_banner((bx0, by0, bx1, by1), BANNER_TOP, BANNER_BOT, 24),
+        (bx0, by0),
+    )
+    d = ImageDraw.Draw(img)
 
-    # ---- 每个等次 ----
-    y += 46
-    for t in tier_results:
-        names = "、".join(n for _, n in t.winners) or "—"
+    def center(text, font, cy, fill, cx=W // 2):
+        w = text_w(text, font)
+        d.text((cx - w / 2, cy), text, font=font, fill=fill)
+
+    # 皇冠 + 标题 + 副标题（无独立品牌行，整体垂直居中）
+    _draw_crown(d, W // 2, by0 + 40, (255, 236, 190))
+    center(title_text, f_title, by0 + 64, WHITE)
+    sub = f"{group_name or '本群'}  ·  {mode_label}  ·  候选 {pool_size} 人  ·  {when_str}"
+    center(sub, f_banner_sub, by1 - 42, (255, 238, 214))
+
+    # ---- 分隔标题：— 中奖名单 — ----
+    y = by1 + 28
+    div = "中 奖 名 单"
+    dw = text_w(div, f_div)
+    dline_y = y + 14
+    d.line([(px + 30, dline_y), (W // 2 - dw // 2 - 24, dline_y)], fill=(226, 196, 150), width=2)
+    d.line([(W // 2 + dw // 2 + 24, dline_y), (W - px - 30, dline_y)], fill=(226, 196, 150), width=2)
+    center(div, f_div, y, BADGE_HEAD)
+
+    # ---- 等次卡片 ----
+    y = y + 50
+    for idx, (t, names, lines) in enumerate(tiers_layout):
+        bh = block_heights[idx]
+        # 卡片投影
+        d.rounded_rectangle([px + 3, y + 5, W - px + 3, y + bh + 5], radius=20,
+                            fill=(0, 0, 0, 18))
+        # 卡片底
+        d.rounded_rectangle([px, y, W - px, y + bh], radius=20, fill=WHITE)
+        d.rounded_rectangle([px, y, W - px, y + bh], radius=20, outline=LINE, width=2)
+        # 左侧奖牌色条
+        accent = _BADGE_COLORS[idx % len(_BADGE_COLORS)][0]
+        d.rounded_rectangle([px, y, px + 8, y + bh], radius=20, fill=accent)
+
+        # 奖牌圆徽 + 等次名
+        badge_cy = y + 48
+        medal_cx = px + 44
+        d.ellipse([medal_cx - 21, badge_cy - 21, medal_cx + 21, badge_cy + 21], fill=accent)
+        rank_txt = str(idx + 1)
+        rw = text_w(rank_txt, f_rank)
+        d.text((medal_cx - rw / 2, badge_cy - 15), rank_txt, font=f_rank, fill=WHITE)
+
+        d.text((px + 80, badge_cy - 19), str(t.prize), font=f_prize, fill=(58, 38, 16))
+        cnt = len(names)
+        cnt_txt = f"{cnt} 名"
+        cw = text_w(cnt_txt, f_short)
+        d.text((W - px - 24 - cw, badge_cy - 13), cnt_txt, font=f_short, fill=SUB_INK)
+
+        # 中奖者胶囊
+        ny = y + 26 + 46 + 18
+        if lines:
+            for li, line_names in enumerate(lines):
+                row_w = sum(text_w(n, f_name) + 2 * CHIP_PAD for n in line_names) + GAP * (len(line_names) - 1)
+                cx = px + 28
+                chip_h = 52
+                for n in line_names:
+                    cwid = text_w(n, f_name) + 2 * CHIP_PAD
+                    fillc = _BADGE_COLORS[idx % len(_BADGE_COLORS)][1]
+                    edgec = _BADGE_COLORS[idx % len(_BADGE_COLORS)][0]
+                    d.rounded_rectangle([cx, ny, cx + cwid, ny + chip_h], radius=16,
+                                        fill=fillc, outline=edgec, width=1)
+                    d.text((cx + CHIP_PAD, ny + (chip_h - 32) / 2 - 2), n,
+                           font=f_name, fill=INK)
+                    cx += cwid + GAP
+                ny += chip_h + 12
+        else:
+            d.text((px + 28, ny), "本轮无人中奖", font=f_name, fill=SUB_INK)
+            ny += 52
+
         if t.shortage:
-            names += f"（缺 {t.shortage} 名）"
-        lines = _wrap_text(d, names, f_name, W - 2 * px - 60)
-        bh = 30 + len(lines) * 50 + 34
-        d.rounded_rectangle([px, y, W - px, y + bh], radius=20, fill=(255, 255, 255))
-        d.rounded_rectangle([px, y, W - px, y + bh], radius=20,
-                            outline=LINE, width=2)
-        prize_lbl = t.prize
-        pw = d.textbbox((0, 0), prize_lbl, font=f_prize)[2]
-        pill_x = px + 20
-        pill_y = y + 18
-        d.rounded_rectangle([pill_x - 14, pill_y - 6, pill_x + pw + 14, pill_y + 40],
-                            radius=999, fill=ORANGE)
-        d.text((pill_x, pill_y + 3), prize_lbl, font=f_prize, fill=(255, 255, 255))
-        ny = y + 74
-        for line in lines:
-            d.text((px + 24, ny), line, font=f_name, fill=BROWN)
-            ny += 50
-        y += bh + 22
+            st = f"名额未抽满，缺 {t.shortage} 名（候选不足）"
+            sw = text_w(st, f_short)
+            d.rounded_rectangle([W - px - 24 - sw - 24, ny - 4, W - px - 24, ny + 30],
+                                radius=12, fill=(253, 237, 227), outline=(238, 196, 160))
+            d.text((W - px - 24 - sw - 12, ny + 2), st, font=f_short, fill=(184, 92, 36))
 
-    # ---- 底部 ----
-    d.text(((W - d.textbbox((0, 0), "群抽奖助手 GroupRaffle", font=f_meta)[2]) / 2,
-            H - 50), "群抽奖助手 GroupRaffle", font=f_meta, fill=(176, 138, 94))
+        y += bh + BLOCK_GAP
+
+    # ---- 备注区 ----
+    if note_lines:
+        nh = notes_h
+        d.rounded_rectangle([px, y, W - px, y + nh], radius=16,
+                            fill=(255, 248, 238), outline=(236, 214, 178), width=1)
+        ny = y + 22
+        for ln in note_lines:
+            d.text((px + 24, ny), "· " + ln if not ln.startswith("·") else ln,
+                   font=f_note, fill=(150, 108, 60))
+            ny += 30
+        y += nh + 10
+
+    # ---- 页脚 ----
+    foot = "群抽奖助手 GroupRaffle"
+    fw = text_w(foot, f_foot)
+    d.text((W // 2 - fw / 2, H - 34), foot, font=f_foot, fill=(190, 160, 120))
 
     out = os.path.join(_out_dir(), _uniq_name("raffle_card.png"))
-    img.save(out)
+    img.convert("RGB").save(out, quality=95)
     return out
 
 
