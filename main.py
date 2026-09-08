@@ -52,7 +52,7 @@ try:
     )
     from .activity import ActivityTracker, now_local
     from .engine import draw, gather_candidates, DrawError
-    from .render import render_result_card, render_help_image
+    from .render import render_result_card, render_help_image, render_info_card
     from .notifier import send_result, group_id_of
     from .scheduler import RaffleScheduler, preview_next
     from .help_data import help_rows_as_dicts, HELP_ROWS
@@ -77,7 +77,7 @@ except ImportError:  # 平铺加载（AstrBot 直接加载 main.py）
     )
     from activity import ActivityTracker, now_local  # type: ignore
     from engine import draw, gather_candidates, DrawError  # type: ignore
-    from render import render_result_card, render_help_image  # type: ignore
+    from render import render_result_card, render_help_image, render_info_card  # type: ignore
     from notifier import send_result, group_id_of  # type: ignore
     from scheduler import RaffleScheduler, preview_next  # type: ignore
     from help_data import help_rows_as_dicts, HELP_ROWS  # type: ignore
@@ -122,7 +122,7 @@ def _fallback_help_text() -> str:
     "astrbot_plugin_group_raffle",
     "Eason4869",
     "群抽奖助手 GroupRaffle：分群配置/定时/活跃度加权/报名/多等次/@/卡片",
-    "0.2.0",
+    "0.3.1-beta",
 )
 class GroupRafflePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -365,7 +365,25 @@ class GroupRafflePlugin(Star):
             result = handler(event, args, gs)
             if asyncio.iscoroutine(result):
                 result = await result
-            if result:
+            if not result:
+                return
+            # 信息卡片：handler 返回 {"card": {"title","subtitle","sections"}, "fallback": str}
+            if isinstance(result, dict) and "card" in result:
+                spec = result["card"]
+                sent = False
+                try:
+                    path = await render_info_card(
+                        self, spec.get("title", ""), spec.get("subtitle", ""),
+                        spec.get("sections", []),
+                    )
+                    if path:
+                        yield event.image_result(path)
+                        sent = True
+                except Exception as e:
+                    logger.warning(f"[GroupRaffle] 信息卡片渲染失败，回退文本：{e}")
+                if not sent:
+                    yield event.plain_result(result.get("fallback") or "")
+            else:
                 yield event.plain_result(result)
         except DrawError as e:
             yield event.plain_result(f"⚠️ {e}")
@@ -531,17 +549,57 @@ class GroupRafflePlugin(Star):
         return "⏸️ 本群抽奖已停用，定时任务已暂停。"
 
     def _h_status(self, event, args, gs):
-        lines = ["🎰 本群抽奖配置", gs.describe()]
+        umo = gs.umo
+        mode_label = MODE_LABELS.get(gs.mode, gs.mode)
+        prizes = "、".join(f"{p['name']}×{p['count']}" for p in gs.prizes) or "（未设置）"
+        sched_desc = gs.describe_schedule() or "未开启定时"
+
+        sections = [
+            {"heading": "参与方式", "items": [
+                f"模式：{mode_label}",
+                f"中奖等次：{prizes}",
+                f"防连中冷却：{gs.cooldown_days} 天" if gs.cooldown_days > 0 else "防连中冷却：关闭",
+                f"排除管理员：{'是' if gs.exclude_admins else '否'}",
+            ]},
+            {"heading": "开奖通知", "items": [
+                f"开奖卡片：{'开启' if gs.card_enabled else '关闭'}",
+                f"@中奖者：{'开启' if gs.at_winners else '关闭'}",
+            ]},
+            {"heading": "定时开奖", "items": [sched_desc]},
+        ]
+        nxt = []
         try:
             nxt = preview_next(gs.schedule, 3)
             if nxt:
-                lines.append("未来开奖：\n" + "\n".join(f"· {x}" for x in nxt))
+                sections.append({"heading": "未来开奖时间", "items": nxt})
         except Exception:
             pass
-        sid = self._sid(gs.umo)
-        signups = self.db.list_signups(gs.umo, sid)
+
+        if gs.mode == MODE_ACTIVITY:
+            sections.append({"heading": "活跃度加权", "items": [
+                f"统计窗口：近 {gs.activity_window_days} 天",
+                f"最低发言条数：{gs.activity_min_count} 条",
+            ]})
+        sid = self._sid(umo)
+        signups = self.db.list_signups(umo, sid)
+        if gs.mode == MODE_SIGNUP:
+            sections.append({"heading": "报名情况", "items": [
+                f"当前场次 #{sid}：{len(signups)} 人",
+            ]})
+
+        # 回退纯文本
+        lines = ["🎰 本群抽奖配置", gs.describe()]
+        if nxt:
+            lines.append("未来开奖：\n" + "\n".join(f"· {x}" for x in nxt))
         lines.append(f"当前报名场次 #{sid}：{len(signups)} 人")
-        return "\n".join(lines)
+        return {
+            "card": {
+                "title": "🎰 本群抽奖配置",
+                "subtitle": f"{group_id_of(umo)} · {mode_label}",
+                "sections": sections,
+            },
+            "fallback": "\n".join(lines),
+        }
 
     def _h_join(self, event, args, gs):
         umo = gs.umo
@@ -563,29 +621,54 @@ class GroupRafflePlugin(Star):
 
     def _h_list(self, event, args, gs):
         umo = gs.umo
+        gid = group_id_of(umo)
         if gs.mode == MODE_SIGNUP:
             sid = self._sid(umo)
             members = self.db.list_signups(umo, sid)
             if not members:
                 return f"当前场次 #{sid} 还没有人报名，发送「抽奖 报名」参与。"
-            names = "、".join(n for _, n in members)
-            return f"📝 场次 #{sid} 报名 {len(members)} 人：\n{names}"
+            items = [f"{n}" for _, n in members]
+            # 每张卡最多展示 40 人，避免超长
+            chunks = [items[i:i + 40] for i in range(0, len(items), 40)]
+            sections = [
+                {"heading": f"报名名单（{len(members)} 人）" + (f" {i+1}/{len(chunks)}" if len(chunks) > 1 else ""),
+                 "items": ch}
+                for i, ch in enumerate(chunks)
+            ]
+            return {
+                "card": {"title": "📝 抽奖报名名单",
+                         "subtitle": f"{gid} · 场次 #{sid}", "sections": sections},
+                "fallback": f"📝 场次 #{sid} 报名 {len(members)} 人：\n" + "、".join(n for _, n in members),
+            }
         if gs.mode == MODE_ACTIVITY:
             counts = self.tracker.counts(umo, gs.activity_window_days)
             if not counts:
                 return f"近 {gs.activity_window_days} 天暂无活跃记录（插件安装后才开始统计）。"
             name_map = dict(self.db.list_users(umo))
             top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:20]
-            lines = [f"📊 近 {gs.activity_window_days} 天活跃榜（前 {len(top)} 名）："]
-            for i, (uid, c) in enumerate(top, 1):
-                lines.append(f"{i}. {name_map.get(uid, uid)}：{c} 条")
-            return "\n".join(lines)
+            items = [f"{name_map.get(uid, uid)}：{c} 条" for uid, c in top]
+            lines = [f"{i}. {name_map.get(uid, uid)}：{c} 条" for i, (uid, c) in enumerate(top, 1)]
+            return {
+                "card": {"title": "📊 活跃榜",
+                         "subtitle": f"{gid} · 近 {gs.activity_window_days} 天",
+                         "sections": [{"heading": f"前 {len(top)} 名", "items": items}]},
+                "fallback": f"📊 近 {gs.activity_window_days} 天活跃榜（前 {len(top)} 名）：\n" + "\n".join(lines),
+            }
         users = self.db.list_users(umo)
         if not users:
             return "插件还未观测到本群成员（群友发言后自动记录）。"
-        names = "、".join(n for _, n in users[:30])
-        more = f" 等 {len(users)} 人" if len(users) > 30 else ""
-        return f"👥 已观测成员 {len(users)} 人：\n{names}{more}"
+        items = [n for _, n in users[:40]]
+        more = f" 等 {len(users)} 人" if len(users) > 40 else ""
+        chunks = [items[i:i + 40] for i in range(0, len(items), 40)]
+        sections = [
+            {"heading": f"已观测成员（{len(users)} 人）" + (f" {i+1}/{len(chunks)}" if len(chunks) > 1 else ""),
+             "items": ch}
+            for i, ch in enumerate(chunks)
+        ]
+        return {
+            "card": {"title": "👥 群成员", "subtitle": gid, "sections": sections},
+            "fallback": f"👥 已观测成员 {len(users)} 人：\n" + "、".join(n for _, n in users[:30]) + more,
+        }
 
     async def _h_draw(self, event, args, gs):
         prizes = gs.prizes
@@ -669,8 +752,7 @@ class GroupRafflePlugin(Star):
         val = _on_off(args[0])
         gs.update({"card_enabled": val})
         if val:
-            return ("✅ 卡片渲染已开启（使用 AstrBot 核心内置 html_render 渲染，"
-                    "无需安装 astrbot_plugin_htmlrender；浏览器不可用时自动降级为本地简版卡片/纯文本）。")
+            return "✅ 卡片渲染已开启。"
         return "✅ 卡片渲染已关闭，开奖以纯文本发送。"
 
     def _h_template(self, event, args, gs):

@@ -79,6 +79,34 @@ async def render_help_image(star, rows: list[dict]) -> Optional[str]:
         return None
 
 
+async def render_info_card(star, title: str, subtitle: str,
+                           sections: list[dict]) -> Optional[str]:
+    """通用信息卡片（状态 / 名单等），与帮助卡同一视觉风格。
+
+    sections: [{heading: str|None, items: [str, ...]}, ...]
+    返回图片路径或 None。
+    """
+    safe = [
+        {
+            "heading": html.escape(str(s.get("heading") or "")),
+            "items": [html.escape(str(x)) for x in (s.get("items") or [])],
+        }
+        for s in sections
+    ]
+    data = {
+        "title": html.escape(title),
+        "subtitle": html.escape(subtitle or ""),
+        "sections": safe,
+    }
+    path = await _render_via_core(star, "info.html", data, width=480)
+    if path:
+        return path
+    try:
+        return await asyncio.to_thread(_render_info_pillow, title, subtitle, sections)
+    except Exception:
+        return None
+
+
 async def _render_via_core(star, template_name: str, data: dict, width: int) -> Optional[str]:
     """调用 AstrBot 核心自带的 html_render（Jinja2）。成功返回文件路径。"""
     if star is None or not hasattr(star, "html_render"):
@@ -214,6 +242,73 @@ def _render_pillow(tier_results, group_name, when_str, mode_label, pool_size,
     center(H - 28, "群抽奖助手 GroupRaffle", f_sub, (176, 138, 94))
 
     out = os.path.join(_out_dir(), "raffle_card.png")
+    img.save(out)
+    return out
+
+
+# ---------------- Pillow 兜底（信息卡：状态/名单） ----------------
+
+def _render_info_pillow(title: str, subtitle: str,
+                        sections: list[dict]) -> Optional[str]:
+    from PIL import Image, ImageDraw
+
+    W = 480
+    pad = 26
+    f_title = _find_cjk_font(26)
+    f_sub = _find_cjk_font(13)
+    f_head = _find_cjk_font(16)
+    f_item = _find_cjk_font(15)
+
+    tmp = Image.new("RGB", (W, 10), (255, 250, 243))
+    d0 = ImageDraw.Draw(tmp)
+
+    # 预估高度
+    blocks = []
+    y = 20 + 40 + 10 + (24 if subtitle else 0)
+    for s in sections:
+        lines = []
+        head = s.get("heading")
+        head_h = 30 if head else 8
+        y += head_h
+        for it in (s.get("items") or []):
+            wrapped = _wrap_text(d0, "· " + it, f_item, W - 2 * pad - 24)
+            lines.append(wrapped)
+            y += len(wrapped) * 24 + 4
+        blocks.append((head, lines))
+        y += 12
+    H = y + 34
+
+    img = Image.new("RGB", (W, H), (255, 250, 243))
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, W, 6], fill=(230, 126, 34))
+
+    def center_x(cy, text, font, fill):
+        w = d.textbbox((0, 0), text, font=font)
+        d.text(((W - (w[2] - w[0])) / 2, cy), text, font=font, fill=fill)
+
+    center_x(18, title, f_title, (194, 87, 26))
+    cy = 52
+    if subtitle:
+        center_x(cy, subtitle, f_sub, (154, 106, 58))
+        cy = 76
+    y = cy + 6
+    for head, lines in blocks:
+        if head:
+            d.rounded_rectangle([pad - 10, y - 4, W - pad + 10, y + 27], radius=8,
+                                fill=(255, 233, 214))
+            d.text((pad, y + 2), head, font=f_head, fill=(160, 74, 18))
+            y += 36
+        else:
+            y += 6
+        for wrapped in lines:
+            for line in wrapped:
+                d.text((pad + 8, y), line, font=f_item, fill=(58, 42, 24))
+                y += 24
+            y += 4
+        y += 10
+    center_x(H - 28, "群抽奖助手 GroupRaffle", f_sub, (176, 138, 94))
+
+    out = os.path.join(_out_dir(), "info.png")
     img.save(out)
     return out
 

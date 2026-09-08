@@ -72,20 +72,24 @@
   .badge.off { background:var(--line); color:var(--muted); }
   .badge.prize { background:var(--brand-l); color:var(--brand-d); margin:0; }
   .row { display:flex; align-items:center; gap:12px; margin-bottom:13px; flex-wrap:wrap; }
-  .row label { width:130px; flex-shrink:0; color:var(--muted); }
-  .row .ctrl { flex:1; min-width:200px; }
+  .row label { width:130px; flex-shrink:0; color:var(--muted); line-height:28px; }
+  .row .ctrl { flex:1; min-width:200px; display:flex; align-items:center; }
+  .row .ctrl[style*="flex:0"] { display:inline-flex; align-items:center; min-width:0; height:28px; }
   input[type=text],input[type=number],select,textarea {
     width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:9px;
     background:var(--bg); color:var(--text); font-size:14px; font-family:inherit;
   }
   textarea { min-height:56px; resize:vertical; }
-  .switch { position:relative; width:46px; height:26px; flex-shrink:0; }
+  .switch { position:relative; width:52px; height:28px; flex-shrink:0; display:inline-block;
+    vertical-align:middle; line-height:28px; }
   .switch input { display:none; }
-  .switch .slider { position:absolute; inset:0; background:var(--muted); border-radius:999px; cursor:pointer; transition:.2s; }
-  .switch .slider::after { content:""; position:absolute; width:20px; height:20px; left:3px; top:3px;
-    background:#fff; border-radius:50%; transition:.2s; }
-  .switch input:checked + .slider { background:var(--brand); }
-  .switch input:checked + .slider::after { transform:translateX(20px); }
+  .switch .slider { position:absolute; inset:0; background:#cdd3dc; border:1px solid #b7bfca;
+    border-radius:999px; cursor:pointer; transition:.2s; }
+  .switch .slider::after { content:""; position:absolute; width:22px; height:22px; left:2px; top:2px;
+    background:#fff; border:1px solid #d3d8e0; border-radius:50%; transition:.2s;
+    box-shadow:0 1px 3px rgba(0,0,0,.28); }
+  .switch input:checked + .slider { background:#2e9e4f; border-color:#28a04a; }
+  .switch input:checked + .slider::after { transform:translateX(24px); border-color:#2e9e4f; }
   .btns { display:flex; gap:10px; margin-top:18px; flex-wrap:wrap; }
   button { padding:9px 20px; border:none; border-radius:9px; cursor:pointer; font-size:14px;
     font-weight:600; font-family:inherit; transition:.15s; }
