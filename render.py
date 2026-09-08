@@ -295,7 +295,6 @@ def _render_pillow(tier_results, group_name, when_str, mode_label, pool_size,
 
     title_text = "模拟开奖（结果不记录）" if simulate else "开奖结果"
 
-    f_brand = _find_cjk_font(20, bold=True)
     f_title = _find_cjk_font(44, bold=True)
     f_banner_sub = _find_cjk_font(21)
     f_div = _find_cjk_font(20, bold=True)
@@ -401,13 +400,11 @@ def _render_pillow(tier_results, group_name, when_str, mode_label, pool_size,
         w = text_w(text, font)
         d.text((cx - w / 2, cy), text, font=font, fill=fill)
 
-    # 皇冠 + 品牌行 + 标题 + 副标题
-    _draw_crown(d, W // 2, by0 + 34, (255, 236, 190))
-    center(title_text, f_title, by0 + 56, WHITE)
-    brand = "群抽奖助手"
-    center(brand, f_brand, by0 + 8, (255, 240, 214))
+    # 皇冠 + 标题 + 副标题（无独立品牌行，整体垂直居中）
+    _draw_crown(d, W // 2, by0 + 40, (255, 236, 190))
+    center(title_text, f_title, by0 + 64, WHITE)
     sub = f"{group_name or '本群'}  ·  {mode_label}  ·  候选 {pool_size} 人  ·  {when_str}"
-    center(sub, f_banner_sub, by1 - 44, (255, 238, 214))
+    center(sub, f_banner_sub, by1 - 42, (255, 238, 214))
 
     # ---- 分隔标题：— 中奖名单 — ----
     y = by1 + 28
