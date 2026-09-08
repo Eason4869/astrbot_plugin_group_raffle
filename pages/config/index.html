@@ -111,6 +111,9 @@
   .filters input { width:200px; }
   .win-name { font-weight:700; color:var(--brand-d); }
 </style>
+<!-- 显式提前引入 bridge SDK：保证内联脚本同步执行时 window.AstrBotPluginPage 已就绪。
+     AstrBot 会把这个固定路径改写为带鉴权的真实 SDK 地址；未改写也不影响独立打开。 -->
+<script src="/api/plugin/page/bridge-sdk.js"></script>
 </head>
 <body>
 <div class="topbar">
@@ -187,8 +190,15 @@ const PLUGIN = "astrbot_plugin_group_raffle";
 const ORIGIN = window.location.origin;
 const OPAGUE_ORIGIN = !ORIGIN || ORIGIN === "null";   // 无 allow-same-origin 的沙箱 iframe
 const LEGACY_API = (OPAGUE_ORIGIN ? "" : ORIGIN) + "/api/plug/" + PLUGIN;
-const BRIDGE = window.AstrBotPluginPage;
-const USE_BRIDGE = !!(BRIDGE && BRIDGE.apiGet && BRIDGE.apiPost);
+// 运行时惰性获取 bridge：不能在解析期把 window.AstrBotPluginPage 存成常量——
+// 内联脚本可能先于 SDK 执行，那时它还是 undefined，会被误判为「独立模式」。
+function getBridge() {
+  try {
+    const b = window.AstrBotPluginPage;
+    if (b && typeof b.apiGet === "function" && typeof b.apiPost === "function") return b;
+  } catch (e) { /* 受限沙箱访问 window 失败，按无 bridge 处理 */ }
+  return null;
+}
 
 // 读取仪表盘登录态：SPA 将 JWT 存在 localStorage("token")，也尝试从 cookie 读取。
 function dashboardToken() {
@@ -255,8 +265,9 @@ async function request(sub, query, method, body) {
 }
 
 async function apiGet(sub, params) {
+  const bridge = getBridge();
   try {
-    if (USE_BRIDGE) return norm(await BRIDGE.apiGet(callSub(sub), params || {}));
+    if (bridge) return norm(await bridge.apiGet(callSub(sub), params || {}));
     const env = await request(sub, params, "GET");
     return env.status ? env : { status: "ok", message: "", data: env };
   } catch (e) {
@@ -265,8 +276,9 @@ async function apiGet(sub, params) {
 }
 
 async function apiPost(sub, body) {
+  const bridge = getBridge();
   try {
-    if (USE_BRIDGE) return norm(await BRIDGE.apiPost(callSub(sub), body || {}));
+    if (bridge) return norm(await bridge.apiPost(callSub(sub), body || {}));
     const env = await request(sub, null, "POST", body || {});
     return env.status ? env : { status: "ok", message: "", data: env };
   } catch (e) {
@@ -524,15 +536,16 @@ async function doDraw() {
 /* ---------- 启动 ----------
  * 在仪表盘嵌入页等待桥接就绪；若桥接缺失（独立打开）或超时，立即回退直连加载，避免一直「加载中」。 */
 async function bootstrap() {
-  if (USE_BRIDGE) {
+  const bridge = getBridge();
+  if (bridge) {
     try {
-      if (BRIDGE && typeof BRIDGE.ready === "function") {
-        await Promise.race([BRIDGE.ready(), new Promise(res => setTimeout(res, 3000))]);
+      if (typeof bridge.ready === "function") {
+        await Promise.race([bridge.ready(), new Promise(res => setTimeout(res, 3000))]);
       }
-    } catch (e) { /* 桥接异常则继续直连 */ }
+    } catch (e) { /* 桥接异常则忽略 */ }
   }
   const modeEl = document.querySelector(".topbar .mode");
-  if (modeEl) modeEl.textContent = USE_BRIDGE ? "嵌入模式" : "独立模式";
+  if (modeEl) modeEl.textContent = bridge ? "嵌入模式" : "独立模式";
   loadOverview();
   loadGroups();
 }
