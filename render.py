@@ -60,18 +60,23 @@ async def render_result_card(star, tier_results, group_name, when_str,
         ],
         "notes": (list(notes or []) + (["※ 模拟开奖，未记录中奖、未清空报名"] if simulate else [])),
     }
-    # 1) 核心内置 html_render
-    path = await _render_via_core(star, "card.html", data, width=520)
-    if path:
-        return path
-    # 2) Pillow 兜底
+    # 结果卡片优先用 Pillow 本地绘制：布局完全可控（居中横幅+等次块），
+    # 避免 html_render 在某些环境下输出“内容挤在左上角”的整页截图。
+    # Pillow 不可用时才回退核心内置 html_render。
     try:
-        return await asyncio.to_thread(
+        p = await asyncio.to_thread(
             _render_pillow, tier_results, group_name, when_str, mode_label,
             pool_size, simulate,
         )
+        if p:
+            return p
     except Exception:
-        return None
+        pass
+    # 兜底：核心内置 html_render
+    path = await _render_via_core(star, "card.html", data, width=520)
+    if path:
+        return path
+    return None
 
 
 async def render_help_image(star, rows: list[dict]) -> Optional[str]:

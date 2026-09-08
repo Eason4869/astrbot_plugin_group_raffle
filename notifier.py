@@ -71,12 +71,15 @@ def build_at_parts(uid_list: list, mc=None) -> list:
     parts = []
     for uid, _ in uid_list:
         try:
-            parts.append(At(qq=str(uid)))
+            parts.append(At(qq=int(str(uid))))
         except Exception:
             try:
-                parts.append(At(user_id=str(uid)))
+                parts.append(At(qq=str(uid)))
             except Exception:
-                continue
+                try:
+                    parts.append(At(user_id=str(uid)))
+                except Exception:
+                    continue
         parts.append(Plain(" "))
     return parts
 
@@ -188,43 +191,36 @@ async def send_result(
     text = build_text(tier_lines, body, notes, simulate=simulate)
 
     at_parts = build_at_parts(winners_flat, mc) if do_real_at else []
+    mention_text = "🧪 模拟开奖：🎉 恭喜中奖！" if simulate else "🎉 恭喜中奖！"
 
-    # ---- 卡片开启：只发卡片（真实@置于文首），不追加文字版 ----
+    # ---- 卡片开启：卡片前先单独发一条真实 @ 提示（@ 独立于卡片之外），
+    #      然后只发卡片图片（不再返回文字版中奖结果） ----
     if card_image_path:
         img = _image_component(card_image_path, mc)
-        if img is not None:
-            parts = list(at_parts) + [img]
+        # 1) 真实 @ 提示（独立消息，确保能 @ 到人）
+        if do_real_at and at_parts:
             try:
-                await context.send_message(umo, _wrap_chain(parts))
-                return (do_real_at, True)
+                await context.send_message(
+                    umo, _wrap_chain(list(at_parts) + [Plain(mention_text)])
+                )
             except Exception:
-                # 图片发送失败：回退 真实@+纯文本（仍保证送达）
-                fallback_parts = list(at_parts) + [Plain(text)]
-                try:
-                    await context.send_message(umo, _wrap_chain(fallback_parts))
-                    return (do_real_at, False)
-                except Exception:
-                    pass
-                try:
-                    await context.send_message(umo, _wrap_chain([Plain(text)]))
-                except Exception:
-                    pass
-                return (False, False)
-        # 有卡路径但组件构造失败 → 落到纯文本
-        parts = list(at_parts) + [Plain(text)]
-        try:
-            await context.send_message(umo, _wrap_chain(parts))
-            return (do_real_at, False)
-        except Exception:
-            pass
+                pass
+        # 2) 发卡片
+        if img is not None:
+            try:
+                await context.send_message(umo, _wrap_chain([img]))
+                return (bool(at_parts), True)
+            except Exception:
+                pass
+        # 3) 卡片失败：纯文本兜底（真实@已单独发过，不再重复）
         try:
             await context.send_message(umo, _wrap_chain([Plain(text)]))
+            return (bool(at_parts), False)
         except Exception:
-            pass
-        return (False, False)
+            return (False, False)
 
     # ---- 无卡片：真实@（文首）+ 文字版 ----
-    parts = list(at_parts) + [Plain(text)]
+    parts = (list(at_parts) + [Plain(text)]) if at_parts else [Plain(text)]
     try:
         await context.send_message(umo, _wrap_chain(parts))
         return (do_real_at, False)

@@ -122,7 +122,7 @@ def _fallback_help_text() -> str:
     "astrbot_plugin_group_raffle",
     "Eason4869",
     "群抽奖助手 GroupRaffle：分群配置/定时/活跃度加权/报名/多等次/@/卡片",
-    "0.3.7-beta",
+    "0.3.8-beta",
 )
 class GroupRafflePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -668,30 +668,15 @@ class GroupRafflePlugin(Star):
         return "\n".join(lines)
 
     async def _h_draw(self, event, args, gs):
-        prizes = gs.prizes
-        if args:
-            try:
-                n = int(args[0])
-                assert n > 0
-                prizes = [{"name": "幸运奖", "count": n}]
-            except Exception:
-                raise ValueError("开奖人数必须是正整数，例如：抽奖 开奖 3")
-        err = await self.do_draw(gs.umo, trigger="manual", prizes_override=prizes)
+        # 始终按本群配置的等次开奖（避免用数字把配置的等次覆盖成单个“幸运奖”）
+        err = await self.do_draw(gs.umo, trigger="manual")
         return err  # None 表示已成功发送开奖消息
 
     async def _h_simulate(self, event, args, gs):
         """模拟开奖：与真实开奖完全一样地发送卡片/@/模板中奖消息，
         但不写中奖记录、不写流水、不清空报名。"""
-        prizes = gs.prizes
-        if args:
-            try:
-                n = int(args[0])
-                assert n > 0
-                prizes = [{"name": "模拟奖", "count": n}]
-            except Exception:
-                raise ValueError("用法：抽奖 模拟 [人数]，例如：抽奖 模拟 3")
         err = await self.do_draw(gs.umo, trigger="manual",
-                                 prizes_override=prizes, simulate=True)
+                                 simulate=True)
         if err:
             # 模拟是预览工具：成员不足等情况给出更友好的提示，而不是冰冷报错
             return f"无法模拟开奖：{err}"

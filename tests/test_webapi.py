@@ -225,8 +225,12 @@ async def main():
     assert ctx.sent, "立即开奖未向群发送消息"
     # 中奖已记录（真实开奖）
     assert p.db.count_winners(umo) > 0, "真实开奖未写中奖记录"
-    print("-> 立即开奖已向群发送消息并记录中奖，中奖人数:",
-          [w["name"] for w in p.db.list_winners(umo, 10)])
+    prize_names = [w["prize"] for w in p.db.list_winners(umo, 10)]
+    print("-> 实际等次:", prize_names)
+    assert "一等奖" in prize_names and "二等奖" in prize_names, \
+        f"配置的等次未生效，抽到的等次: {prize_names}"
+    assert "幸运奖" not in prize_names, "不应出现默认幸运奖（等次被覆盖）"
+    print("-> 已按配置等次(一等奖×1/二等奖×2)开奖且写库")
 
     # 3) draw_now 缺参应报错
     webmod.request = StubReq({})
