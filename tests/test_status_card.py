@@ -148,6 +148,7 @@ class FakeEvent:
         self._admin = admin
         self.plain_sent = []
         self.image_sent = []
+        self.stopped = False
 
     @property
     def unified_msg_origin(self):
@@ -172,6 +173,15 @@ class FakeEvent:
     def image_result(self, path):
         self.image_sent.append(path)
         return Result("image", path)
+
+    def stop_event(self):
+        self.stopped = True
+
+    def is_stopped(self):
+        return self.stopped
+
+    def set_result(self, *a):
+        pass
 
 
 class Plugin(M.GroupRafflePlugin):
@@ -207,15 +217,18 @@ async def main():
     ev = await run_cmd(p, "抽奖 状态")
     print("状态 -> images:", len(ev.image_sent), "plains:", ev.plain_sent[:1])
     assert ev.image_sent, "状态未返回卡片图片"
+    assert ev.stopped, "状态未 stop_event，可能被 LLM 接管"
 
     ev = await run_cmd(p, "抽奖 名单")
     print("名单 -> images:", len(ev.image_sent), "plains:", ev.plain_sent[:1])
     assert ev.image_sent, "名单未返回卡片图片"
+    assert ev.stopped, "名单未 stop_event，可能被 LLM 接管"
 
     # 停用群后，只读信息命令仍应返回
     gs.set_enabled(False)
     ev = await run_cmd(p, "抽奖 状态")
     assert ev.image_sent or ev.plain_sent, "停用后 状态 未返回结果"
+    assert ev.stopped, "停用后 状态 未 stop_event"
     print("-> 停用后 状态 仍返回:", bool(ev.image_sent or ev.plain_sent))
 
     print("OK")

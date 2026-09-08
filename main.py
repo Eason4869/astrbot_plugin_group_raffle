@@ -122,7 +122,7 @@ def _fallback_help_text() -> str:
     "astrbot_plugin_group_raffle",
     "Eason4869",
     "群抽奖助手 GroupRaffle：分群配置/定时/活跃度加权/报名/多等次/@/卡片",
-    "0.3.2-beta",
+    "0.3.3-beta",
 )
 class GroupRafflePlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -292,6 +292,21 @@ class GroupRafflePlugin(Star):
         return parts
 
     async def _dispatch_command(self, event):
+        """统一派发入口：执行子命令后终止事件，避免结果被 LLM 接管/重复回复。
+
+        AstrBot 中插件的消息结果默认 result_type=CONTINUE，且只要事件未被
+        stop、未发生真实 send，ProcessStage 就会继续调用 LLM。因此这里无论
+        子命令以「yield 结果」还是「context.send_message 直发」返回，都在
+        完成后 stop_event，确保命令由插件完整接管、不再触发 LLM 闲聊。
+        """
+        async for r in self._dispatch_inner(event):
+            yield r
+        try:
+            event.stop_event()
+        except Exception:
+            pass
+
+    async def _dispatch_inner(self, event):
         """统一派发：解析子命令 → 帮助/启用等特殊分支 → 权限检查 → 执行子命令。"""
         parts = self._command_tokens(event)
         sub = parts[0] if parts else "帮助"

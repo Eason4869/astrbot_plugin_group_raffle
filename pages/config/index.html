@@ -74,24 +74,26 @@
   .row { display:flex; align-items:center; gap:12px; margin-bottom:13px; flex-wrap:wrap; }
   .row label { width:130px; flex-shrink:0; color:var(--muted); line-height:28px; }
   .row .ctrl { flex:1; min-width:200px; display:flex; align-items:center; }
-  /* 开关类控件：容器只占开关本身宽度，不被 flex:1 拉伸，垂直居中 */
-  .row .ctrl.switch-ctrl { flex:0 0 auto; min-width:0; height:28px; display:inline-flex;
-    align-items:center; justify-content:flex-start; gap:0; }
+  /* 开关行容器：只占开关宽度，绝不拉伸 */
+  .row .ctrl.grs-ctrl { flex:0 0 auto; min-width:0; width:auto; height:24px; display:inline-flex;
+    align-items:center; justify-content:flex-start; }
+
+  /* 开关（类名前缀 grs-，避免与页面/主题通用 .switch/.slider 样式冲突而变长） */
+  .grs-sw { position:relative; width:38px; height:22px; flex:0 0 auto; display:inline-block;
+    vertical-align:middle; cursor:pointer; }
+  .grs-sw input { display:none; }
+  .grs-sw .grs-track { position:absolute; inset:0; background:#ccd2da; border:1px solid #b9c0ca;
+    border-radius:999px; transition:background .18s, border-color .18s; }
+  .grs-sw .grs-knob { position:absolute; width:18px; height:18px; left:2px; top:2px;
+    background:#fff; border-radius:50%; box-shadow:0 1px 2px rgba(0,0,0,.3);
+    transition:transform .18s; }
+  .grs-sw input:checked + .grs-track { background:#2f9e4c; border-color:#2f9e4c; }
+  .grs-sw input:checked + .grs-track .grs-knob { transform:translateX(14px); }
   input[type=text],input[type=number],select,textarea {
     width:100%; padding:8px 11px; border:1px solid var(--line); border-radius:9px;
     background:var(--bg); color:var(--text); font-size:14px; font-family:inherit;
   }
   textarea { min-height:56px; resize:vertical; }
-  .switch { position:relative; width:52px; height:28px; flex-shrink:0; display:inline-block;
-    vertical-align:middle; line-height:28px; }
-  .switch input { display:none; }
-  .switch .slider { position:absolute; inset:0; background:#cdd3dc; border:1px solid #b7bfca;
-    border-radius:999px; cursor:pointer; transition:.2s; }
-  .switch .slider::after { content:""; position:absolute; width:22px; height:22px; left:2px; top:2px;
-    background:#fff; border:1px solid #d3d8e0; border-radius:50%; transition:.2s;
-    box-shadow:0 1px 3px rgba(0,0,0,.28); }
-  .switch input:checked + .slider { background:#2e9e4f; border-color:#28a04a; }
-  .switch input:checked + .slider::after { transform:translateX(24px); border-color:#2e9e4f; }
   .btns { display:flex; gap:10px; margin-top:18px; flex-wrap:wrap; }
   button { padding:9px 20px; border:none; border-radius:9px; cursor:pointer; font-size:14px;
     font-weight:600; font-family:inherit; transition:.15s; }
@@ -315,7 +317,7 @@ document.querySelectorAll(".tab").forEach(t => t.onclick = () => {
 
 const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const amp = s => String(s == null ? "" : s).replace(/["\\]/g, c => ({"\\": "\\\\", '"': "\\\""}[c]));
-const sw = (id, v) => `<label class="switch"><input type="checkbox" id="${id}" ${v ? "checked" : ""}><span class="slider"></span></label>`;
+const sw = (id, v) => `<label class="grs-sw"><input type="checkbox" id="${id}" ${v ? "checked" : ""}><span class="grs-track"><span class="grs-knob"></span></span></label>`;
 const val = id => document.getElementById(id).checked;
 const sval = id => document.getElementById(id).value;
 const segVal = id => document.querySelector("#" + id + " button.sel").dataset.v;
@@ -380,8 +382,8 @@ async function loadGlobal() {
         <div class="hint">追加在模板末尾的联系方式（模板含 &lt;contact&gt; 时替换）</div></div></div>
       <div class="row"><label>默认中奖模板</label><div class="ctrl"><textarea id="g-tpl">${esc(c.default_template || "")}</textarea>
         <div class="hint">占位符 &lt;winners&gt; &lt;count&gt; &lt;group&gt; &lt;time&gt; &lt;contact&gt;</div></div></div>
-      <div class="row"><label>默认卡片</label><div class="ctrl switch-ctrl">${sw("g-card", c.card_enabled)}</div></div>
-      <div class="row"><label>默认@中奖者</label><div class="ctrl switch-ctrl">${sw("g-at", c.at_enabled)}</div></div>
+      <div class="row"><label>默认卡片</label><div class="ctrl grs-ctrl">${sw("g-card", c.card_enabled)}</div></div>
+      <div class="row"><label>默认@中奖者</label><div class="ctrl grs-ctrl">${sw("g-at", c.at_enabled)}</div></div>
       <div class="row"><label>新群默认模式</label><div class="ctrl"><div class="seg" id="g-defmode">
         ${[["equal", "全员等权"], ["activity", "活跃度加权"], ["signup", "报名参与"]].map(([k, v]) =>
             `<button data-v="${k}" class="${c.default_mode === k ? "sel" : ""}">${v}</button>`).join("")}</div></div></div>
@@ -457,7 +459,7 @@ function renderDetail() {
   const modes = [["equal", "全部等权"], ["activity", "活跃度加权"], ["signup", "报名参与"]];
   const st = [["none", "关闭"], ["daily", "每日"], ["weekly", "每周"], ["biweekly", "每两周"], ["monthly", "每月"], ["custom", "cron"]];
   document.getElementById("detail").innerHTML = `
-    <div class="row"><label>启用本群抽奖</label><div class="ctrl switch-ctrl">${sw("f-enabled", c.enabled)}</div></div>
+    <div class="row"><label>启用本群抽奖</label><div class="ctrl grs-ctrl">${sw("f-enabled", c.enabled)}</div></div>
     <div class="section-title">参与与中奖</div>
     <div class="row"><label>参与模式</label><div class="ctrl"><div class="seg" id="f-mode">
       ${modes.map(([k, v]) => `<button data-v="${k}" class="${c.mode === k ? "sel" : ""}">${v}</button>`).join("")}</div></div></div>
@@ -465,13 +467,13 @@ function renderDetail() {
       value="${esc(c.prizes.map(p => p.name + ":" + p.count).join(","))}"><div class="hint">一等奖:1,二等奖:2</div></div></div>
     <div class="row"><label>防连中冷却(天)</label><div class="ctrl" style="flex:0 0 160px">
       <input type="number" id="f-cooldown" value="${c.cooldown_days}" min="0"></div></div>
-    <div class="row"><label>排除管理员</label><div class="ctrl switch-ctrl">${sw("f-exadmins", c.exclude_admins)}</div></div>
+    <div class="row"><label>排除管理员</label><div class="ctrl grs-ctrl">${sw("f-exadmins", c.exclude_admins)}</div></div>
     <div class="section-title">活跃度加权</div>
     <div class="row"><label>统计窗口(天)</label><div class="ctrl" style="flex:0 0 160px"><input type="number" id="f-window" value="${c.activity_window_days}"></div></div>
     <div class="row"><label>最低发言条数</label><div class="ctrl" style="flex:0 0 160px"><input type="number" id="f-mincount" value="${c.activity_min_count}"></div></div>
     <div class="section-title">通知与卡片</div>
-    <div class="row"><label>@中奖者</label><div class="ctrl switch-ctrl">${sw("f-at", c.at_winners)}</div></div>
-    <div class="row"><label>开奖卡片</label><div class="ctrl switch-ctrl">${sw("f-card", c.card_enabled)}</div></div>
+    <div class="row"><label>@中奖者</label><div class="ctrl grs-ctrl">${sw("f-at", c.at_winners)}</div></div>
+    <div class="row"><label>开奖卡片</label><div class="ctrl grs-ctrl">${sw("f-card", c.card_enabled)}</div></div>
     <div class="row"><label>中奖模板</label><div class="ctrl"><textarea id="f-template">${esc(c.template || "")}</textarea>
       <div class="hint">占位符 &lt;winners&gt; &lt;count&gt; &lt;group&gt; &lt;time&gt; &lt;contact&gt;</div></div></div>
     <div class="section-title">定时开奖</div>
@@ -526,14 +528,20 @@ async function saveDetail() {
     activity_window_days: parseInt(sval("f-window"), 10) || 7, activity_min_count: parseInt(sval("f-mincount"), 10) || 0,
     at_winners: val("f-at"), card_enabled: val("f-card"), template: sval("f-template"), schedule: readSched(),
   };
-  const r = await apiPost("config", { umo: curUmo, patch: patch });
-  if (r.status === "ok") {
+  let r;
+  try {
+    r = await apiPost("config", { umo: curUmo, patch: patch });
+  } catch (e) {
+    toast("❌ 保存请求失败：" + ((e && e.message) || e));
+    return;
+  }
+  if (r && r.status === "ok") {
     toast("✅ 已保存");
     cur = r.data;
     renderDetail();
     loadGroups();
   } else {
-    toast("❌ " + (r.message || "保存失败"));
+    toast("❌ " + ((r && r.message) || "保存失败"));
   }
 }
 
@@ -547,7 +555,13 @@ async function doDraw() {
       + "仍要立即开奖吗？";
   }
   if (!confirm(msg)) return;
-  const r = await apiPost("draw", { umo: curUmo });
+  let r;
+  try {
+    r = await apiPost("draw", { umo: curUmo });
+  } catch (e) {
+    toast("❌ 开奖请求失败：" + ((e && e.message) || e));
+    return;
+  }
   toast(r && r.status === "ok"
     ? "🎲 开奖指令已执行，请在群内查看"
     : "❌ " + ((r && r.message) || "失败"));
